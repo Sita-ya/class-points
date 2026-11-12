@@ -1,0 +1,1440 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>班級經營與集點系統</title>
+
+<!--
+  ╔══════════════════════════════════════════════════════════════╗
+  ║  Firebase 雲端同步設定步驟（不設定也能用，只是只存在本機）      ║
+  ╚══════════════════════════════════════════════════════════════╝
+  1. 開啟 https://console.firebase.google.com ，用 Google 帳號登入 →「新增專案」→ 取名（例：class-points）→ 建立。
+  2. 左側「Build / 建構」→ Authentication →「開始使用」→ 登入方式分頁 → 啟用「Google」→ 填入支援電子郵件 → 儲存。
+  3. Authentication →「設定」→「已授權的網域」：加入你放置這個網頁的網域
+     （例如 你的帳號.github.io、localhost、你的網站網域）。
+     ※ Google 登入「不能」在直接雙擊開啟的 file:// 網頁使用，請用下列任一方式：
+        (a) 放到 GitHub Pages / Firebase Hosting / Netlify 等網站空間；
+        (b) 在檔案所在資料夾執行 `python -m http.server 8000`，再開 http://localhost:8000/ 。
+  4. 左側「Build」→ Firestore Database →「建立資料庫」→ 選「正式版模式」→ 選離你近的地區（例：asia-east1 台灣）。
+  5. Firestore →「規則」分頁，貼上下列規則並「發布」（只有登入的老師本人，依 uid，能讀寫自己的資料）：
+
+        rules_version = '2';
+        service cloud.firestore {
+          match /databases/{database}/documents {
+            match /users/{uid}/{document=**} {
+              allow read, write: if request.auth != null && request.auth.uid == uid;
+            }
+          }
+        }
+
+  6. 專案設定（齒輪）→「一般」→「您的應用程式」→ 點 </> 網頁圖示 → 註冊應用程式 → 複製 firebaseConfig，
+     貼到下方 window.FIREBASE_CONFIG 取代空白內容即可。
+-->
+<script>
+/* ===================== Firebase 設定區（請在這裡貼上你的 firebaseConfig）===================== */
+window.FIREBASE_CONFIG = {
+  apiKey: "",
+  authDomain: "",
+  projectId: "",
+  storageBucket: "",
+  messagingSenderId: "",
+  appId: ""
+};
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Huninn&family=Noto+Sans+TC:wght@400;500;700&family=Zen+Maru+Gothic:wght@500;700&display=swap" rel="stylesheet">
+<!-- 匯入 Excel（SheetJS）與 Word（mammoth.js） -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+
+<style>
+/* ===================== 色彩與字體變數 ===================== */
+:root{
+  --bg:#FFFCF6; --card:#FFFEFB;
+  --ink:#3E3A39; --ink2:#5E5754; --muted:#837A74;
+  --bd:#3E3A39; --line:#E6DCCB;
+  --coral:#F2A497; --accent-ink:#B5503F; --accent-weak:#FDE6E1;
+  --sky:#A8D3E6; --sky-weak:#E2F1F8;
+  --yellow:#F6D27A; --yellow-weak:#FFF8DC;
+  --mint:#B9DAA5; --lav:#B7A6CF; --pink:#FFE4E1;
+  --good:#47793A; --good-weak:#E1F0D5;
+  --bad:#BE4A3A; --bad-weak:#FCDFD9;
+  --warn:#C9972C; --warn-weak:#FBEBC0;
+  --g1:#7DB6D4; --g2:#F2A497; --g3:#9CC784; --g4:#EBC25F; --g5:#B7A6CF;
+  --font-h:"Huninn","Zen Maru Gothic",sans-serif;
+  --font-b:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-b);font-size:17px;line-height:1.55;min-height:100vh}
+/* 紙張雜訊紋理 */
+body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.09;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .4  0 0 0 0 .35  0 0 0 0 .3  0 0 0 .9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")}
+#app,#sheet{position:relative;z-index:1}
+h1,h2,h3,h4,.h,.num,button,.btn,.tab{font-family:var(--font-h)}
+.num{font-variant-numeric:tabular-nums;font-size:24px}
+a{color:var(--accent-ink)}
+.wrap{max-width:1100px;margin:0 auto;padding:0 16px}
+.muted{color:var(--muted)} .small{font-size:14px} .right{margin-left:auto}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.stack>*+*{margin-top:14px}
+
+/* ===== 卡片 ===== */
+.card{background:var(--card);border:3px solid var(--bd);border-radius:22px;padding:18px}
+.card h3{margin:0 0 10px;font-size:22px}
+
+/* ===== 按鈕（立體貼紙感）===== */
+.btn{font-size:18px;min-height:44px;padding:6px 16px;border:3px solid var(--bd);border-radius:16px;background:var(--card);color:var(--ink);
+  box-shadow:0 4px 0 var(--bd);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  transition:transform .08s,box-shadow .08s;touch-action:manipulation;user-select:none;-webkit-tap-highlight-color:transparent}
+.btn:active{transform:translateY(3px);box-shadow:0 1px 0 var(--bd)}
+.btn.primary{background:var(--coral)} .btn.good{background:var(--mint)}
+.btn.bad{background:var(--bad-weak);color:var(--bad)} .btn.sky{background:var(--sky)} .btn.yellow{background:var(--yellow)}
+.btn.ghost{background:var(--bg);border-style:dashed;box-shadow:none}
+.btn.ghost:active{transform:translateY(2px)}
+.btn.sm{min-height:36px;font-size:15px;padding:2px 10px;border-radius:12px;box-shadow:0 3px 0 var(--bd)}
+.btn.sm:active{transform:translateY(2px);box-shadow:0 1px 0 var(--bd)}
+.btn.xs{min-height:32px;font-size:14px;padding:0 8px;border-radius:10px;border-width:2px;box-shadow:0 2px 0 var(--bd)}
+.btn.dis,.btn:disabled{background:#EAE5DD;color:var(--muted);border-color:#B9B0A6;box-shadow:0 3px 0 #B9B0A6;cursor:not-allowed}
+
+/* ===== 輸入框 ===== */
+input[type=text],input[type=number],input[type=date],input[type=url],select,textarea{
+  font-family:var(--font-b);font-size:17px;color:var(--ink);background:#fff;border:3px solid var(--bd);border-radius:14px;padding:8px 12px;min-height:44px;max-width:100%}
+textarea{width:100%;resize:vertical}
+input[type=number]{width:90px}
+input:focus,select:focus,textarea:focus{outline:3px solid var(--sky);outline-offset:1px}
+input[type=checkbox],input[type=radio]{width:22px;height:22px;accent-color:var(--coral);vertical-align:middle}
+label{cursor:pointer}
+
+/* ===== 頂端（固定）===== */
+.top{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:3px solid var(--bd);padding:8px 0 16px}
+.top-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:8px}
+.brand{font-family:var(--font-h);font-size:24px;display:flex;align-items:center;gap:8px}
+.sync{display:flex;align-items:center;gap:8px;margin-left:auto;font-size:15px}
+.dot{width:14px;height:14px;border-radius:50%;border:2px solid var(--bd);background:#ccc;display:inline-block}
+.dot.synced{background:#7CC36A} .dot.syncing{background:#F2C14E} .dot.offline{background:#E4604E} .dot.local{background:#ccc}
+.session{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:8px}
+.session .big{font-family:var(--font-h);font-size:22px;background:var(--yellow-weak);border:3px solid var(--bd);border-radius:999px;padding:2px 16px}
+.tabs{display:flex;gap:8px;overflow-x:auto;padding:2px 4px 10px}
+.tab{flex:none;font-size:18px;min-height:44px;padding:4px 18px;border:3px solid var(--bd);border-radius:999px;background:var(--card);color:var(--ink);cursor:pointer;display:flex;align-items:center;gap:6px}
+.tab.on{background:var(--yellow)}
+
+/* ===== 標籤 ===== */
+.tag{display:inline-flex;align-items:center;gap:3px;border:2px solid var(--bd);border-radius:999px;padding:0 9px;font-size:13px;line-height:1.7;background:#fff;white-space:nowrap;margin:1px 2px}
+.t-lead{background:var(--yellow-weak)} .t-teach{background:var(--pink)} .t-sc{background:var(--sky-weak)} .t-gc{background:var(--good-weak)}
+.gtag{background:var(--gc,#eee)}
+
+/* ===== 版面 ===== */
+main.wrap{padding:44px 16px 120px}
+.grid{display:grid;gap:18px}
+.grid.classes{grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}
+.grid.groups{grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
+.grid.two{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.classcard{cursor:pointer;transition:transform .12s;position:relative}
+.classcard:hover{transform:translateY(-3px) rotate(-.4deg)}
+.classcard .name{font-family:var(--font-h);font-size:40px}
+.addcard{border-style:dashed;display:flex;align-items:center;justify-content:center;min-height:160px;cursor:pointer;color:var(--muted);font-family:var(--font-h);font-size:22px;gap:8px}
+
+/* ===== 表格 ===== */
+.table-wrap{overflow-x:auto;border:3px solid var(--bd);border-radius:22px;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:860px}
+th{font-family:var(--font-h);font-weight:400;text-align:left;background:var(--yellow-weak);padding:10px 12px;border-bottom:3px solid var(--bd);white-space:nowrap}
+td{padding:9px 12px;border-bottom:2px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+td.nm{font-size:19px;font-weight:700}
+td.nm a{cursor:pointer;color:var(--ink);text-decoration:none;border-bottom:2px dotted var(--muted)}
+.ops{display:flex;flex-wrap:wrap;gap:6px}
+.convert-line{margin-top:6px;font-size:14px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.convert-line input{min-height:34px;width:76px;padding:2px 8px;border-width:2px;border-radius:10px;font-size:15px}
+
+/* ===== 進度條 ===== */
+.bar{height:14px;border:2px solid var(--bd);border-radius:99px;background:#fff;overflow:hidden;min-width:70px}
+.bar i{display:block;height:100%;background:var(--sky);border-right:2px solid var(--bd);border-radius:0 99px 99px 0}
+.bar i[style*="width:0%"]{border-right:0}
+
+/* ===== 分組卡片 ===== */
+.gcard{padding:0;overflow:hidden;position:relative}
+.ghead{background:var(--gc);border-bottom:3px solid var(--bd);padding:10px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ghead .gname{font-family:var(--font-h);font-size:24px}
+.rank{font-family:var(--font-h);background:#fff;border:2px solid var(--bd);border-radius:99px;padding:0 10px;font-size:15px}
+.gscore{padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:2px dashed var(--line)}
+.gscore .num{font-size:34px;min-width:44px;display:inline-block;position:relative}
+.members{list-style:none;margin:0;padding:8px 10px;min-height:70px}
+.members.over{background:var(--sky-weak)}
+.mem{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:14px;cursor:pointer;border:2px solid transparent}
+.mem:hover{background:var(--yellow-weak)}
+.mem.sel{background:var(--accent-weak);border-color:var(--bd)}
+.mem .mname{font-size:19px;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mem .mno{color:var(--muted);font-size:14px;min-width:24px}
+.mem .mpts{font-family:var(--font-h);font-size:22px;font-variant-numeric:tabular-nums;position:relative;display:inline-block;min-width:34px;text-align:right}
+.mem .mv{display:none;gap:2px}
+.mem:hover .mv{display:flex}
+@media (hover:none){.mem .mv{display:flex}}
+.medal{position:absolute;right:10px;top:-2px}
+.unassigned .ghead{background:#EAE5DD}
+
+/* ===== 彈窗 ===== */
+.overlay{position:fixed;inset:0;z-index:50;background:rgba(62,58,57,.55);display:flex;align-items:flex-start;justify-content:center;padding:4vh 12px;overflow:auto}
+.overlay.top{z-index:80}
+.dlg{width:100%;max-width:520px;margin:auto;animation:rise .18s ease-out}
+.dlg.wide{max-width:760px}
+.dlg h3{font-size:24px;margin:0 0 10px}
+.dlg .acts{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap}
+.hero-pts{font-family:var(--font-h);font-size:54px;line-height:1;font-variant-numeric:tabular-nums}
+
+/* ===== 面板按鈕列 ===== */
+.btnrow{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.cust{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.sect{border-top:2px dashed var(--line);padding-top:12px;margin-top:14px}
+.sect h4{margin:0 0 8px;font-size:18px;color:var(--ink2);font-weight:400}
+
+/* ===== 批次列 ===== */
+.batchbar{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--yellow-weak);border-top:3px solid var(--bd);padding:10px 16px}
+.batchbar .in{max-width:1100px;margin:0 auto;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+
+/* ===== 開關 ===== */
+.switch{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-h);font-size:18px;cursor:pointer;min-height:44px;padding:0 6px}
+.switch .trk{width:54px;height:30px;border:3px solid var(--bd);border-radius:99px;background:#fff;position:relative;transition:background .15s}
+.switch .trk::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border:2px solid var(--bd);border-radius:50%;background:var(--card);transition:left .15s}
+.switch.on .trk{background:var(--mint)} .switch.on .trk::after{left:26px}
+
+/* ===== 紀錄色 ===== */
+.pos{color:var(--good);font-weight:700} .neg{color:var(--bad);font-weight:700}
+.pill{display:inline-block;border:2px solid var(--bd);border-radius:99px;padding:0 10px;font-size:14px;background:var(--yellow-weak)}
+.notice{background:var(--warn-weak);border:3px solid var(--bd);border-radius:16px;padding:10px 14px}
+.empty{text-align:center;color:var(--muted);padding:30px 10px}
+
+/* ===== 座位表 ===== */
+.seatimg{width:100%;max-height:70vh;object-fit:contain;border:3px solid var(--bd);border-radius:18px;background:#fff;cursor:zoom-in;display:block}
+#fsView{position:fixed;inset:0;z-index:100;background:#111;display:none;align-items:center;justify-content:center;cursor:zoom-out}
+#fsView img{max-width:100vw;max-height:100vh;object-fit:contain}
+#bigText{position:fixed;inset:0;z-index:100;background:var(--bg);display:none;padding:5vh 6vw;overflow:auto;cursor:pointer}
+#bigText .t{font-family:var(--font-h);font-size:clamp(34px,5.4vw,80px);line-height:1.5;white-space:pre-wrap}
+#bigText .hint{position:fixed;right:20px;bottom:14px;color:var(--muted)}
+
+/* ===== 提示 ===== */
+#toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:120;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+.toast{background:var(--ink);color:#fff;border-radius:99px;padding:8px 20px;font-size:17px;animation:rise .2s}
+
+/* ===== 可愛動畫 ===== */
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes bump{0%{transform:scale(1)}35%{transform:scale(1.5) translateY(-4px)}70%{transform:scale(.92)}100%{transform:scale(1)}}
+@keyframes floatUp{0%{opacity:0;transform:translateY(4px)}15%{opacity:1}100%{opacity:0;transform:translateY(-34px)}}
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-7px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(3px)}}
+@keyframes medalIn{from{transform:scale(0) rotate(-40deg)}to{transform:scale(1) rotate(0)}}
+.bump{animation:bump .5s ease-out}
+.shake{animation:shake .45s ease-in-out}
+.floaty{position:absolute;right:-6px;top:-8px;font-family:var(--font-h);font-size:20px;pointer-events:none;animation:floatUp 1.2s ease-out forwards;white-space:nowrap}
+.floaty.good{color:var(--good)} .floaty.bad{color:var(--bad)}
+.medal{animation:medalIn .5s ease-out}
+/* 扭蛋機 */
+.gacha-stage{text-align:center}
+.gacha-stage svg{width:240px;height:290px;max-width:70%}
+.gacha-stage .knob{transform-origin:120px 196px;animation:spinK 1.1s ease-in-out .2s 1}
+.gacha-stage .ball{animation:dropB 1.2s cubic-bezier(.5,0,.8,.6) 1.2s both}
+.gacha-stage .inball{animation:jig .35s ease-in-out 3}
+.gacha-stage .lid{transform-origin:70px 100px;animation:lidUp 1s ease-out .6s both}
+.gacha-stage .gift{animation:giftJ .6s ease-in-out 2}
+.gacha-stage .ok{opacity:0;font-family:var(--font-h);font-size:32px;color:var(--good);margin-top:6px}
+.gacha-stage .ok.done{opacity:1;animation:rise .4s}
+@keyframes spinK{to{transform:rotate(360deg)}}
+@keyframes dropB{0%{transform:translate(0,0)}60%{transform:translate(0,76px)}100%{transform:translate(0,70px)}}
+@keyframes jig{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+@keyframes lidUp{0%{transform:rotate(0)}100%{transform:rotate(-28deg) translate(-4px,-14px)}}
+@keyframes giftJ{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  .gacha-stage .ok{opacity:1}
+}
+
+@media (max-width:640px){
+  body{font-size:16px} .brand{font-size:20px} .grid.groups{grid-template-columns:1fr}
+}
+@media print{.top,.batchbar{display:none}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="sheet"></div>
+<div id="fsView"><img alt=""></div>
+<div id="bigText"><div class="t"></div><div class="hint">點一下畫面或按 Esc 關閉</div></div>
+<div id="toast"></div>
+<input type="file" id="fStudents" hidden accept=".xlsx,.xls,.csv,.docx">
+<input type="file" id="fSeat" hidden accept="image/png,image/jpeg">
+<input type="file" id="fJson" hidden accept=".json,application/json">
+
+<script>
+/* =====================================================================
+   ★★★ 點數規則設定（要改預設值就改這裡）★★★
+   這裡是「新增班級時」的預設值；每個班級也可以在「設定」分頁各自修改。
+   ===================================================================== */
+const CONFIG = {
+  defaults: {
+    rank1: 3, rank2: 2, rank3: 1,     // 下課結算：第 1、2、3 名每位組員加幾點
+    card: 1,                           // 紙卡（每張）
+    selfCheck: 2,                      // 自我檢核達成
+    reading: 2,                        // 閱讀單
+    deduct: 1,                         // 扣分（每次扣幾點）
+    gacha: 30,                         // 扭蛋所需點數
+    prize: 60,                         // 獎品所需點數
+    convPer: 5,                        // 舊點數換算：每 N 點…
+    convGive: 2,                       // …換 M 點
+    convRem: 1,                        // 不滿 N 點的餘數（有餘數時）給幾點
+    cycle: 14,                         // 小組長輪替週期（天）
+    reasons: ['非排隊時間沒有坐在座位上', '排隊時聊天講話']  // 扣分原因（「其他」會自動附加）
+  },
+  groupSteps: [1, 2, 3, -1],           // 小組秩序分按鈕
+  customMax: 10,                       // 自訂加分按鈕上限
+  settleRequirePositive: true,         // 結算時，小組秩序分 ≤ 0 的組別不加分
+  defaultGroupCount: 5,                // 新增班級時預設組數
+  seedClasses: ['402', '501', '605'],  // 第一次開啟時自動建立的班級
+  seatImgMaxWidth: 1600,               // 座位表圖片壓縮寬度上限
+  seatImgMaxChars: 700000              // 座位表 base64 字數上限（Firestore 單文件 <1MB）
+};
+const GROUP_COLORS = ['var(--g1)', 'var(--g2)', 'var(--g3)', 'var(--g4)', 'var(--g5)'];
+const TYPE_LABEL = {
+  card: '紙卡', self: '自我檢核達成', read: '閱讀單', deduct: '扣分', custom: '自訂加分',
+  group: '小組秩序分', settle: '下課結算', gacha: '兌換扭蛋', prize: '兌換獎品', convert: '舊點數換算'
+};
+const LS_KEY = 'classroom_points_db_v1';
+const LS_UI = 'classroom_points_ui_v1';
+
+/* ===================== 小工具 ===================== */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let _lastT = 0;
+const now = () => { let t = Date.now(); if (t <= _lastT) t = _lastT + 1; _lastT = t; return t; };
+const uid = () => Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+const p2 = n => String(n).padStart(2, '0');
+const fmt = t => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${p2(d.getHours())}:${p2(d.getMinutes())}`; };
+const ymd = d => { d = d || new Date(); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; };
+const clone = o => JSON.parse(JSON.stringify(o));
+const noNum = v => parseInt(v, 10);
+function toast(msg) {
+  const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg;
+  $('#toast').appendChild(el); setTimeout(() => el.remove(), 2600);
+}
+const reduceMotion = () => window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ===================== 手繪風圖示（內嵌 SVG）===================== */
+const ICONS = {
+  crown: '<path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z" fill="#F6D27A"/><path d="M5.5 19h13"/>',
+  star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z" fill="#F6D27A"/>',
+  pencil: '<path d="M4 20l1-5L16 4l4 4L9 19z" fill="#A8D3E6"/><path d="M14 6l4 4"/>',
+  board: '<rect x="5" y="4" width="14" height="17" rx="3" fill="#B9DAA5"/><path d="M9 4h6v3H9zM9 12h6M9 16h4"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', minus: '<path d="M5 12h14"/>',
+  home: '<path d="M4 11l8-7 8 7v9H4z" fill="#FFE4E1"/><path d="M10 20v-5h4v5"/>',
+  trash: '<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13" fill="#FCDFD9"/>',
+  edit: '<path d="M4 20l1-5L16 4l4 4L9 19z" fill="#FFF8DC"/><path d="M14 6l4 4"/>',
+  upload: '<path d="M12 16V5M7 10l5-5 5 5M5 19h14"/>', download: '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',
+  gift: '<rect x="4" y="10" width="16" height="10" rx="2" fill="#FDE6E1"/><rect x="3" y="7" width="18" height="4" rx="1.5" fill="#F2A497"/><path d="M12 7v13M12 7c-2-4-6-3-5 0M12 7c2-4 6-3 5 0"/>',
+  capsule: '<circle cx="12" cy="12" r="8.5" fill="#E2F1F8"/><path d="M3.5 12h17" /><path d="M3.5 12a8.5 8.5 0 0 1 17 0z" fill="#F2A497"/>',
+  medalG: '<path d="M8 3l4 7 4-7"/><circle cx="12" cy="15" r="6" fill="#F6D27A"/><path d="M12 12v6M10 13l2-1"/>',
+  medalS: '<path d="M8 3l4 7 4-7"/><circle cx="12" cy="15" r="6" fill="#D9DEE3"/><path d="M10 13.5c0-2.5 4-2.5 4 0 0 2-4 2.5-4 4h4"/>',
+  medalB: '<path d="M8 3l4 7 4-7"/><circle cx="12" cy="15" r="6" fill="#E3B189"/><path d="M10 12.5h4l-2 2c2 0 2.5 3.5-2 3.5"/>',
+  check: '<path d="M5 12l5 5 9-10"/>',
+  book: '<path d="M3 5c3-1 6-1 9 1 3-2 6-2 9-1v14c-3-1-6-1-9 1-3-2-6-2-9-1z" fill="#FFF8DC"/><path d="M12 6v14"/>',
+  card: '<rect x="4" y="5" width="16" height="14" rx="3" fill="#FFF8DC"/><path d="M8 10h8M8 14h5"/>',
+  up: '<path d="M12 19V5M6 11l6-6 6 6"/>', down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+  user: '<circle cx="12" cy="8" r="4" fill="#FFE4E1"/><path d="M4 21c0-5 4-7 8-7s8 2 8 7z" fill="#E2F1F8"/>',
+  expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="3" fill="#E2F1F8"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
+  link: '<path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"/>',
+  cloud: '<path d="M7 18a4 4 0 0 1-.5-8 6 6 0 0 1 11.5 1.5A3.3 3.3 0 0 1 17.5 18z" fill="#E2F1F8"/>',
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  gear: '<circle cx="12" cy="12" r="3.5" fill="#FFF8DC"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',
+  list: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  seat: '<rect x="3" y="5" width="18" height="14" rx="3" fill="#E1F0D5"/><path d="M7 10h4M13 10h4M7 14h4M13 14h4"/>',
+  users: '<circle cx="9" cy="8" r="3.5" fill="#FFE4E1"/><circle cx="17" cy="9" r="2.8" fill="#FFF8DC"/><path d="M2 20c0-4 3-6 7-6s7 2 7 6zM16 14c3 0 6 1.5 6 5"/>',
+  group: '<rect x="3" y="4" width="8" height="7" rx="2" fill="#E2F1F8"/><rect x="13" y="4" width="8" height="7" rx="2" fill="#FDE6E1"/><rect x="3" y="13" width="8" height="7" rx="2" fill="#E1F0D5"/><rect x="13" y="13" width="8" height="7" rx="2" fill="#FFF8DC"/>',
+  badge: '<circle cx="12" cy="10" r="6" fill="#F6D27A"/><path d="M8.5 15l-1.5 6 5-3 5 3-1.5-6"/>',
+  swap: '<path d="M4 8h14l-4-4M20 16H6l4 4"/>'
+};
+function ico(n, s = 22) {
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="#3E3A39" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" style="flex:none;vertical-align:middle" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+}
+
+/* ===================== 資料：建立、讀取、儲存 ===================== */
+function newClass(name) {
+  const n = CONFIG.defaultGroupCount;
+  return {
+    id: uid(), name, created: now(),
+    students: [],                  // {id,no,name,gid,order,oldPts,converted}
+    logs: [],                      // {id,t,op,session,sid,gid,type,pts,reason}
+    groups: Array.from({ length: n }, (_, i) => ({ id: uid(), name: `第${i + 1}組`, ci: i })),
+    roles: { teacher: null, notes: '', personal: [], scorers: [], leaders: {}, round: 1, roundStart: ymd(), history: [] },
+    links: [], seat: null, session: 1, settled: {},
+    settings: clone(CONFIG.defaults)
+  };
+}
+function seedDB() {
+  const db = { v: 1, classes: {}, touched: false };
+  CONFIG.seedClasses.forEach(n => { const c = newClass(n); db.classes[c.id] = c; });
+  return db;
+}
+function loadDB() {
+  try {
+    const r = localStorage.getItem(LS_KEY);
+    if (r) { const d = JSON.parse(r); if (d && d.classes) return d; }
+  } catch (e) { console.warn(e); }
+  return seedDB();
+}
+let DB = loadDB();
+let UI = { classId: null, tab: 'students', batch: false, sel: new Set(), sheet: null, fx: { bump: [], float: [], shake: [] },
+  filter: { sid: '', gid: '', type: '', session: '' }, search: '' };
+try { const u = JSON.parse(localStorage.getItem(LS_UI) || '{}'); if (u.classId && DB.classes[u.classId]) UI.classId = u.classId; if (u.tab) UI.tab = u.tab; } catch (e) {}
+const cls = () => DB.classes[UI.classId];
+const S = c => ({ ...CONFIG.defaults, ...(c.settings || {}) });
+function persistLocal() {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(DB, (k, v) => k[0] === '_' ? undefined : v)); }
+  catch (e) { toast('⚠ 瀏覽器儲存空間不足，請先匯出備份，或刪除座位表圖片'); }
+}
+function saveUI() { try { localStorage.setItem(LS_UI, JSON.stringify({ classId: UI.classId, tab: UI.tab })); } catch (e) {} }
+
+/* 由「紀錄」重新計算每位學生的點數（刪除紀錄後點數會自動回算；點數最低為 0）*/
+function recompute(c) {
+  const m = {};
+  c.students.forEach(s => { s._pts = 0; s._tot = 0; m[s.id] = s; });
+  [...c.logs].sort((a, b) => a.t - b.t).forEach(l => {
+    if (l.type === 'group' || !l.sid) return;
+    const s = m[l.sid]; if (!s) return;
+    s._pts = Math.max(0, s._pts + l.pts);
+    if (l.pts > 0 && l.type !== 'gacha' && l.type !== 'prize') s._tot += l.pts;   // 學期累計只算「獲得」
+  });
+}
+Object.values(DB.classes).forEach(recompute);
+
+/* 任何資料變動都呼叫 commit：重算 → 存本機 → 推雲端 → 重繪 */
+function commit(c) {
+  DB.touched = true;
+  if (c) recompute(c);
+  persistLocal();
+  window.__cloudPush && window.__cloudPush();
+  render();
+}
+
+/* ===================== 計算輔助 ===================== */
+function members(c, gid) {
+  const gids = new Set(c.groups.map(g => g.id));
+  return c.students.filter(s => gid ? s.gid === gid : (!s.gid || !gids.has(s.gid)))
+    .sort((a, b) => (a.order ?? a.no) - (b.order ?? b.no) || a.no - b.no);
+}
+const gscore = (c, gid, n) => c.logs.reduce((a, l) => a + (l.type === 'group' && l.gid === gid && l.session === n ? l.pts : 0), 0);
+function ranks(c) {
+  const out = {}, gs = c.groups.filter(g => members(c, g.id).length);
+  gs.forEach(g => out[g.id] = { score: gscore(c, g.id, c.session) });
+  gs.forEach(g => out[g.id].rank = 1 + gs.filter(h => out[h.id].score > out[g.id].score).length);
+  return out;
+}
+function bonusFor(c, rank, score) {
+  const s = S(c);
+  if (rank > 3) return 0;
+  if (CONFIG.settleRequirePositive && score <= 0) return 0;
+  return [s.rank1, s.rank2, s.rank3][rank - 1] || 0;
+}
+function convertPts(c, old) {
+  const s = S(c); old = Math.max(0, Math.floor(+old || 0));
+  if (!old) return 0;
+  const per = Math.max(1, s.convPer);
+  return Math.floor(old / per) * s.convGive + (old % per > 0 ? s.convRem : 0);
+}
+const gachaCount = (c, s) => Math.floor(s._pts / Math.max(1, S(c).gacha));
+function gobj(c, gid) { return c.groups.find(g => g.id === gid); }
+function gcolor(c, g) { return g ? GROUP_COLORS[(g.ci ?? 0) % GROUP_COLORS.length] : '#EAE5DD'; }
+function roleTags(c, s) {
+  const r = c.roles, t = [], g = gobj(c, s.gid);
+  if (g && r.leaders[g.id] === s.id) t.push(`<span class="tag t-lead">${ico('crown', 16)}${esc(g.name)}小組長</span>`);
+  if (r.teacher === s.id) t.push(`<span class="tag t-teach">${ico('star', 16)}小老師</span>`);
+  if (r.personal.includes(s.id)) t.push(`<span class="tag t-sc">${ico('pencil', 16)}個人記分員</span>`);
+  if (r.scorers.includes(s.id)) t.push(`<span class="tag t-gc">${ico('board', 16)}小組記分員</span>`);
+  return t.join('');
+}
+function gtag(c, s) {
+  const g = gobj(c, s.gid);
+  return g ? `<span class="tag gtag" style="--gc:${gcolor(c, g)}">${esc(g.name)}</span>` : '<span class="tag">未分組</span>';
+}
+const bar = pct => `<div class="bar"><i style="width:${Math.max(0, Math.min(100, pct))}%"></i></div>`;
+function nextGachaHtml(c, s) {
+  const cost = Math.max(1, S(c).gacha), rem = cost - (s._pts % cost);
+  return `<div class="small muted">距離下次扭蛋還差 <b>${rem}</b> 點</div>${bar((s._pts % cost) / cost * 100)}`;
+}
+
+/* ===================== 紀錄（加扣分）===================== */
+function mkLog(c, s, type, pts, reason, op) {
+  return { id: uid(), t: now(), op: op || uid(), session: c.session, sid: s ? s.id : null, gid: s ? s.gid : null, type, pts, reason: reason || '' };
+}
+function removeLogs(c, ids) {
+  const set = new Set(ids);
+  c.logs.filter(l => set.has(l.id)).forEach(l => {
+    if (l.type === 'convert') { const s = c.students.find(x => x.id === l.sid); if (s) s.converted = false; }
+  });
+  const sessions = new Set(c.logs.filter(l => set.has(l.id) && l.type === 'settle').map(l => l.session));
+  c.logs = c.logs.filter(l => !set.has(l.id));
+  sessions.forEach(n => { if (!c.logs.some(l => l.type === 'settle' && l.session === n)) delete c.settled[n]; });
+}
+function fxAward(sid, pts, gid) {
+  UI.fx.bump.push('s:' + sid);
+  UI.fx.float.push({ k: 's:' + sid, t: (pts > 0 ? '+' : '') + pts, c: pts > 0 ? 'good' : 'bad' });
+  if (pts < 0) { UI.fx.shake.push('card:' + gid); UI.fx.shake.push('pcard'); }
+}
+/* 對一位學生加／扣分；回傳是否成功 */
+function award(sid, type, pts, reason) {
+  const c = cls(), s = c.students.find(x => x.id === sid); if (!s || !pts) return false;
+  if (pts < 0 && s._pts <= 0) { toast('目前已是 0 點，不再扣分'); return false; }
+  c.logs.push(mkLog(c, s, type, pts, reason));
+  fxAward(sid, pts, s.gid);
+  commit(c); return true;
+}
+function awardMany(sids, type, pts, reason) {
+  const c = cls(), op = uid();
+  sids.forEach(id => { const s = c.students.find(x => x.id === id); if (!s) return; c.logs.push(mkLog(c, s, type, pts, reason, op)); fxAward(id, pts, s.gid); });
+  commit(c);
+}
+function hasSelfCheck(c, sid) { return c.logs.some(l => l.sid === sid && l.session === c.session && l.type === 'self'); }
+
+/* ===================== 對話框（確認／表單）===================== */
+function dialog(inner, getter) {
+  return new Promise(res => {
+    const o = document.createElement('div'); o.className = 'overlay top';
+    o.innerHTML = `<div class="dlg card">${inner}</div>`;
+    document.body.appendChild(o);
+    const close = v => { o.remove(); res(v); };
+    o.addEventListener('click', e => {
+      const b = e.target.closest('[data-d]');
+      if (b) {
+        if (b.dataset.d === 'ok') { const v = getter ? getter(o) : true; if (v === undefined) return; close(v); } else close(getter ? null : false);
+      } else if (e.target === o) close(getter ? null : false);
+    });
+    o.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); $('[data-d=ok]', o).click(); } if (e.key === 'Escape') close(getter ? null : false); });
+    const f = $('input,select,textarea', o); if (f) setTimeout(() => f.focus(), 30);
+  });
+}
+function confirmBox(msg, o = {}) {
+  return dialog(`<h3>${esc(o.title || '請確認')}</h3><div style="font-size:18px;white-space:pre-line">${esc(msg)}</div>
+    <div class="acts"><button class="btn ghost" data-d="no">取消</button><button class="btn ${o.danger ? 'bad' : 'primary'}" data-d="ok">${esc(o.ok || '確定')}</button></div>`);
+}
+function formBox(title, body, getter, ok = '確定') {
+  return dialog(`<h3>${esc(title)}</h3>${body}<div class="acts"><button class="btn ghost" data-d="no">取消</button><button class="btn primary" data-d="ok">${esc(ok)}</button></div>`, getter);
+}
+const alertBox = (msg, title = '提醒') => dialog(`<h3>${esc(title)}</h3><div style="white-space:pre-line;font-size:18px">${esc(msg)}</div><div class="acts"><button class="btn primary" data-d="ok">好</button></div>`);
+</script>
+
+<script>
+/* =====================================================================
+   畫面繪製（把資料轉成 HTML 字串，再一次塞進 #app）
+   ===================================================================== */
+const SYNC = { status: 'local', user: null };
+function syncHtml() {
+  const L = { local: '本機模式', nocfg: '本機模式（尚未設定雲端）', synced: '已同步', syncing: '同步中', offline: '離線，稍後上傳' };
+  const dot = SYNC.status === 'nocfg' ? 'local' : SYNC.status;
+  const hasCfg = window.FIREBASE_CONFIG && window.FIREBASE_CONFIG.apiKey;
+  return `<span class="dot ${dot}"></span><span>${L[SYNC.status] || ''}</span>
+    ${SYNC.user ? `<span class="muted small">${esc(SYNC.user.email || SYNC.user.displayName || '')}</span><button class="btn xs" data-act="logout">登出</button>`
+      : `<button class="btn xs sky" data-act="login">${ico('cloud', 16)}Google 登入</button>`}`;
+}
+function setSync(status) { SYNC.status = status; const b = $('#syncBox'); if (b) b.innerHTML = syncHtml(); }
+function setUser(u) { SYNC.user = u ? { email: u.email, displayName: u.displayName, uid: u.uid } : null; const b = $('#syncBox'); if (b) b.innerHTML = syncHtml(); }
+
+function render() {
+  const sy = window.scrollY, c = cls();
+  if (UI.classId && !c) UI.classId = null;
+  $('#app').innerHTML = c ? renderClass(c) : renderHome();
+  renderSheet();
+  saveUI();
+  window.scrollTo(0, sy);
+  runFx();
+}
+function runFx() {
+  const f = UI.fx; UI.fx = { bump: [], float: [], shake: [] };
+  f.bump.forEach(k => $$(`[data-fx="${k}"]`).forEach(e => e.classList.add('bump')));
+  f.shake.forEach(k => $$(`[data-fx="${k}"]`).forEach(e => e.classList.add('shake')));
+  f.float.forEach(o => $$(`[data-fx="${o.k}"]`).forEach(e => {
+    const sp = document.createElement('span'); sp.className = 'floaty ' + o.c; sp.textContent = o.t;
+    e.appendChild(sp); setTimeout(() => sp.remove(), 1300);
+  }));
+}
+
+/* ----- 最上方固定列 ----- */
+function header(c) {
+  const tabs = [['students', '學生名單', 'users'], ['groups', '分組與加分', 'group'], ['seat', '座位表', 'seat'], ['roles', '角色設定', 'badge'], ['logs', '紀錄', 'list'], ['settings', '設定', 'gear']];
+  return `<header class="top"><div class="wrap">
+    <div class="top-row">
+      ${c ? `<button class="btn sm" data-act="home">${ico('home', 20)}回首頁</button>` : ''}
+      <div class="brand">${ico('book', 28)}${c ? esc(c.name) + ' 班' : '班級經營與集點系統'}</div>
+      <div class="sync" id="syncBox">${syncHtml()}</div>
+    </div>
+    ${c ? `<div class="session"><span class="big">第 <span class="num" style="font-size:26px">${c.session}</span> 節課</span>
+      ${c.settled[c.session] ? '<span class="pill">本節已結算</span>' : ''}
+      <button class="btn sm yellow" data-act="newSession">${ico('plus', 18)}開始新的一節課</button></div>
+    <nav class="tabs">${tabs.map(t => `<button class="tab ${UI.tab === t[0] ? 'on' : ''}" data-act="tab" data-tab="${t[0]}">${ico(t[2], 20)}${t[1]}</button>`).join('')}</nav>` : ''}
+  </div></header>`;
+}
+
+/* ----- 首頁：班級列表 ----- */
+function renderHome() {
+  const list = Object.values(DB.classes).sort((a, b) => a.created - b.created);
+  return `${header(null)}<main class="wrap">
+    <h2 style="font-size:28px;margin:0 0 14px">我的班級</h2>
+    <div class="grid classes">
+      ${list.map(c => `<div class="card classcard" data-act="openClass" data-id="${c.id}">
+        <div class="name">${esc(c.name)}</div>
+        <div class="muted" style="margin:6px 0 14px">${ico('user', 18)} ${c.students.length} 位學生　${ico('group', 18)} ${c.groups.length} 組</div>
+        <div class="row">
+          <button class="btn sm" data-act="renameClass" data-id="${c.id}">${ico('edit', 16)}改名</button>
+          <button class="btn sm bad" data-act="delClass" data-id="${c.id}">${ico('trash', 16)}刪除</button>
+        </div></div>`).join('')}
+      <div class="card addcard" data-act="addClass">${ico('plus', 30)}新增班級</div>
+    </div>
+    <div class="card" style="margin-top:26px"><h3>資料備份</h3>
+      <p class="muted" style="margin-top:0">資料存在這台電腦的瀏覽器裡。建議定期匯出備份；換電腦或清除瀏覽資料前請務必先匯出。</p>
+      <div class="row"><button class="btn good" data-act="exportAll">${ico('download', 20)}匯出全部資料（JSON 備份）</button>
+      <button class="btn" data-act="importAll">${ico('upload', 20)}匯入備份</button></div></div>
+  </main>`;
+}
+
+function renderClass(c) {
+  const V = { students: vStudents, groups: vGroups, seat: vSeat, roles: vRoles, logs: vLogs, settings: vSettings };
+  return header(c) + `<main class="wrap">${(V[UI.tab] || vStudents)(c)}</main>` + (UI.tab === 'groups' && UI.batch ? batchBar(c) : '');
+}
+
+/* ----- 分頁 1：學生名單 ----- */
+function vStudents(c) {
+  const st = S(c), list = [...c.students].sort((a, b) => a.no - b.no);
+  return `<div class="row" style="margin-bottom:14px">
+    <button class="btn primary" data-act="pickStudents">${ico('upload', 20)}匯入名單（xlsx／csv／docx）</button>
+    <button class="btn" data-act="addStudent">${ico('plus', 20)}新增學生</button>
+    <button class="btn yellow" data-act="convertAll">${ico('swap', 20)}全班一次換算舊點數</button>
+    <span class="muted small right">共 ${list.length} 位</span></div>
+  ${list.length ? `<div class="table-wrap"><table><thead><tr><th>座號</th><th>姓名</th><th>組別</th><th>角色標籤</th><th>目前點數</th><th>學期累計獲得</th><th>可扭蛋次數</th><th>操作</th></tr></thead><tbody>
+  ${list.map(s => {
+    const cn = Math.floor(s._pts / Math.max(1, st.gacha));
+    return `<tr><td class="num">${s.no}</td>
+    <td class="nm"><a data-act="detail" data-sid="${s.id}">${esc(s.name)}</a></td>
+    <td>${gtag(c, s)}</td><td>${roleTags(c, s) || '<span class="muted">—</span>'}</td>
+    <td style="min-width:130px"><span class="num" data-fx="s:${s.id}" style="position:relative;display:inline-block">${s._pts}</span>${nextGachaHtml(c, s)}</td>
+    <td class="num">${s._tot}</td><td class="num">${cn} <span class="small muted">次</span></td>
+    <td><div class="ops">
+      <button class="btn sm good" data-act="panel" data-sid="${s.id}">${ico('plus', 16)}加扣分</button>
+      <button class="btn sm ${s._pts >= st.gacha ? 'yellow' : 'dis'}" ${s._pts >= st.gacha ? '' : 'disabled'} data-act="redeem" data-kind="gacha" data-sid="${s.id}">${ico('capsule', 16)}扭蛋 ${st.gacha}</button>
+      <button class="btn sm ${s._pts >= st.prize ? 'sky' : 'dis'}" ${s._pts >= st.prize ? '' : 'disabled'} data-act="redeem" data-kind="prize" data-sid="${s.id}">${ico('gift', 16)}獎品 ${st.prize}</button>
+      <button class="btn sm" data-act="editStudent" data-sid="${s.id}">${ico('edit', 16)}</button>
+      <button class="btn sm bad" data-act="delStudent" data-sid="${s.id}">${ico('trash', 16)}</button></div>
+      <div class="convert-line">${s.converted
+        ? `<span class="pill">舊 ${s.oldPts ?? 0} 點 → 已換算 +${convertPts(c, s.oldPts)}</span><button class="btn xs" data-act="resetConvert" data-sid="${s.id}">重設換算</button>`
+        : `舊制度點數 <input type="number" min="0" class="oldin" data-sid="${s.id}" value="${s.oldPts ?? ''}" placeholder="0"><button class="btn xs yellow" data-act="convert" data-sid="${s.id}">換算</button>`}</div>
+    </td></tr>`;
+  }).join('')}</tbody></table></div>`
+    : `<div class="card empty">還沒有學生。請按「匯入名單」或「新增學生」。</div>`}
+  <p class="muted small">舊點數換算：每 ${st.convPer} 點換 ${st.convGive} 點，不滿 ${st.convPer} 點的餘數算 ${st.convRem} 點（可到「設定」修改）。每位學生只能換算一次。</p>`;
+}
+
+/* ----- 分頁 2：分組與加分 ----- */
+function vGroups(c) {
+  const rk = ranks(c), settled = c.settled[c.session];
+  const card = (g) => {
+    const mem = members(c, g ? g.id : ''), gid = g ? g.id : '';
+    const r = g ? rk[g.id] : null;
+    const medalName = g && settled && settled[g.id] ? { 1: 'medalG', 2: 'medalS', 3: 'medalB' }[settled[g.id]] : null;
+    return `<section class="card gcard ${g ? '' : 'unassigned'}" data-fx="card:${gid}" style="${g ? '--gc:' + gcolor(c, g) : '--gc:#EAE5DD'}">
+      <div class="ghead">
+        <span class="gname">${esc(g ? g.name : '未分組')}</span>
+        ${r ? `<span class="rank">目前第 ${r.rank} 名</span>` : ''}
+        ${g ? `<span class="right row" style="gap:4px"><button class="btn xs" data-act="renameGroup" data-gid="${g.id}" title="重新命名">${ico('edit', 16)}</button><button class="btn xs bad" data-act="delGroup" data-gid="${g.id}" title="刪除組別">${ico('trash', 16)}</button></span>` : ''}
+        ${medalName ? `<span class="medal" style="top:46px;right:12px;position:absolute">${ico(medalName, 40)}</span>` : ''}
+      </div>
+      ${g ? `<div class="gscore"><div>本節秩序分<br><span class="num" data-fx="g:${gid}">${r ? r.score : gscore(c, gid, c.session)}</span></div>
+        <div class="row" style="gap:6px">${CONFIG.groupSteps.map(v => `<button class="btn sm ${v > 0 ? 'good' : 'bad'}" data-act="gscore" data-gid="${gid}" data-v="${v}">${v > 0 ? '+' : ''}${v}</button>`).join('')}</div></div>` : ''}
+      ${UI.batch && mem.length ? `<div style="padding:8px 14px 0"><button class="btn xs" data-act="selGroup" data-gid="${gid}">全選／取消這一組</button></div>` : ''}
+      <ul class="members" data-drop="${gid}">
+        ${mem.map(s => {
+          const lead = g && c.roles.leaders[g.id] === s.id;
+          return `<li class="mem ${UI.sel.has(s.id) ? 'sel' : ''}" draggable="true" data-sid="${s.id}" data-act="member">
+            ${UI.batch ? `<input type="checkbox" ${UI.sel.has(s.id) ? 'checked' : ''} tabindex="-1" style="pointer-events:none">` : ''}
+            <span class="mno">${s.no}</span>
+            <span class="mname">${lead ? ico('crown', 20) + ' ' : ''}${c.roles.teacher === s.id ? ico('star', 18) + ' ' : ''}${esc(s.name)}</span>
+            <span class="mpts" data-fx="s:${s.id}">${s._pts}</span>
+            <span class="mv"><button class="btn xs" data-act="mvUp" data-sid="${s.id}" title="上移">${ico('up', 14)}</button><button class="btn xs" data-act="mvDown" data-sid="${s.id}" title="下移">${ico('down', 14)}</button></span>
+          </li>`;
+        }).join('') || '<li class="muted small" style="padding:10px">（把學生拖曳到這裡）</li>'}
+      </ul></section>`;
+  };
+  return `<div class="row" style="margin-bottom:14px">
+    <div class="switch ${UI.batch ? 'on' : ''}" data-act="toggleBatch"><span class="trk"></span>批次模式</div>
+    <button class="btn" data-act="addGroup">${ico('plus', 20)}新增組別</button>
+    <button class="btn primary right" data-act="settle">${ico('badge', 20)}${c.settled[c.session] ? '重新檢視結算' : '下課結算'}</button>
+    ${c.settled[c.session] ? `<button class="btn bad" data-act="unsettle">取消本節結算</button>` : ''}
+  </div>
+  <p class="muted small" style="margin-top:-4px">小組秩序分只決定本節課的小組排名，不會加到個人點數。點學生名字開啟加扣分面板；可拖曳學生到其他組，或用 ▲▼ 調整順序。</p>
+  <div class="grid groups">${c.groups.map(g => card(g)).join('')}${members(c, '').length ? card(null) : ''}</div>`;
+}
+function batchBar(c) {
+  const st = S(c), n = UI.sel.size;
+  return `<div class="batchbar"><div class="in"><b class="h">已選 ${n} 位</b>
+    <button class="btn sm good" data-act="batch" data-type="card">紙卡 +${st.card}</button>
+    <button class="btn sm good" data-act="batch" data-type="self">自我檢核達成 +${st.selfCheck}</button>
+    <button class="btn sm good" data-act="batch" data-type="read">閱讀單 +${st.reading}</button>
+    <select id="batchCustom" style="min-height:36px;padding:2px 8px">${Array.from({ length: CONFIG.customMax }, (_, i) => `<option value="${i + 1}">+${i + 1}</option>`).join('')}</select>
+    <button class="btn sm" data-act="batch" data-type="custom">自訂加分</button>
+    <button class="btn sm ghost" data-act="selClear">清除選取</button>
+    <button class="btn sm ghost" data-act="toggleBatch">離開批次</button></div></div>`;
+}
+
+/* ----- 個人加扣分面板／明細（浮動視窗）----- */
+function renderSheet() {
+  const L = $('#sheet'), sh = UI.sheet, c = cls();
+  const s = sh && c ? c.students.find(x => x.id === sh.sid) : null;
+  if (!s) { UI.sheet = null; L.innerHTML = ''; L.className = ''; return; }
+  L.className = 'overlay';
+  L.innerHTML = `<div class="dlg wide card" data-fx="pcard">${sh.type === 'panel' ? panelHtml(c, s) : detailHtml(c, s)}</div>`;
+}
+function panelHtml(c, s) {
+  const st = S(c);
+  return `<div class="row"><h3 style="margin:0;font-size:28px">${esc(s.name)} <span class="muted small">${s.no} 號</span></h3>${gtag(c, s)}${roleTags(c, s)}
+      <button class="btn xs right" data-act="closeSheet">${ico('close', 16)}</button></div>
+    <div class="row" style="margin:12px 0 4px;align-items:flex-end"><span class="hero-pts" data-fx="s:${s.id}" style="position:relative">${s._pts}</span><span class="h" style="font-size:20px">點</span>
+      <span class="muted">累計 ${s._tot} 點　可扭蛋 ${gachaCount(c, s)} 次</span></div>
+    ${nextGachaHtml(c, s)}
+    <div class="sect"><h4>紙卡（學生下課用小紙卡換點）</h4><div class="btnrow">
+      <input type="number" id="pQty" min="1" value="1" style="width:80px"> 張
+      <button class="btn good" data-act="p-card" data-sid="${s.id}">紙卡 +${st.card}／張</button></div></div>
+    <div class="sect btnrow">
+      <button class="btn good" data-act="p-self" data-sid="${s.id}">自我檢核達成 +${st.selfCheck}</button>
+      <button class="btn good" data-act="p-read" data-sid="${s.id}">閱讀單 +${st.reading}</button></div>
+    <div class="sect"><h4>扣 ${st.deduct} 點（請選原因）</h4><div class="btnrow">
+      <select id="pReason">${st.reasons.map(r => `<option>${esc(r)}</option>`).join('')}<option value="__other">其他（自行輸入）</option></select>
+      <input type="text" id="pOther" placeholder="選「其他」時填寫原因" style="flex:1;min-width:160px">
+      <button class="btn bad" data-act="p-deduct" data-sid="${s.id}">扣 ${st.deduct} 點</button></div></div>
+    <div class="sect"><h4>自訂加分</h4><div class="cust">${Array.from({ length: CONFIG.customMax }, (_, i) => `<button class="btn sm good" data-act="p-custom" data-sid="${s.id}" data-v="${i + 1}">+${i + 1}</button>`).join('')}</div></div>
+    <div class="sect"><h4>兌換（從目前點數扣除）</h4><div class="btnrow">
+      <button class="btn ${s._pts >= st.gacha ? 'yellow' : 'dis'}" ${s._pts >= st.gacha ? '' : 'disabled'} data-act="redeem" data-kind="gacha" data-sid="${s.id}">${ico('capsule', 20)}扭蛋 −${st.gacha}</button>
+      <button class="btn ${s._pts >= st.prize ? 'sky' : 'dis'}" ${s._pts >= st.prize ? '' : 'disabled'} data-act="redeem" data-kind="prize" data-sid="${s.id}">${ico('gift', 20)}獎品 −${st.prize}</button></div></div>
+    <div class="sect btnrow"><span class="muted">換組：</span>
+      <select data-chg="moveTo" data-sid="${s.id}"><option value="">未分組</option>${c.groups.map(g => `<option value="${g.id}" ${s.gid === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select>
+      <button class="btn sm right" data-act="detail" data-sid="${s.id}">${ico('list', 16)}個人明細</button></div>`;
+}
+function detailHtml(c, s) {
+  const logs = c.logs.filter(l => l.sid === s.id).sort((a, b) => b.t - a.t);
+  const red = logs.filter(l => l.type === 'gacha' || l.type === 'prize');
+  return `<div class="row"><h3 style="margin:0;font-size:26px">${esc(s.name)} 的個人明細</h3><button class="btn xs right" data-act="closeSheet">${ico('close', 16)}</button></div>
+    <div class="row" style="margin:10px 0"><span class="pill">目前 ${s._pts} 點</span><span class="pill">累計獲得 ${s._tot} 點</span><span class="pill">兌換 ${red.length} 次</span>
+      <button class="btn sm" data-act="panel" data-sid="${s.id}">回到加扣分</button></div>
+    ${red.length ? `<h4 class="h" style="margin:8px 0 4px">兌換歷史</h4><div>${red.map(l => `<div class="small">${fmt(l.t)}　第${l.session}節　${TYPE_LABEL[l.type]}　<span class="neg">${l.pts}</span></div>`).join('')}</div>` : ''}
+    <h4 class="h" style="margin:14px 0 4px">加扣分紀錄</h4>
+    <div class="table-wrap" style="max-height:48vh;overflow:auto"><table style="min-width:520px"><thead><tr><th>時間</th><th>節</th><th>項目</th><th>點數</th><th>原因</th></tr></thead><tbody>
+    ${logs.map(l => `<tr><td class="small">${fmt(l.t)}</td><td>${l.session}</td><td>${TYPE_LABEL[l.type] || l.type}</td><td class="${l.pts >= 0 ? 'pos' : 'neg'}">${l.pts > 0 ? '+' : ''}${l.pts}</td><td class="small">${esc(l.reason)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">還沒有紀錄</td></tr>'}
+    </tbody></table></div>`;
+}
+
+/* ----- 分頁 3：座位表 ----- */
+function vSeat(c) {
+  return `<div class="card"><h3>${ico('seat', 24)} 班級座位表</h3>
+    ${c.seat ? `<img class="seatimg" src="${c.seat}" alt="座位表" data-act="fsSeat"><p class="muted small">點圖片可全螢幕顯示，按 Esc 或再點一下離開。</p>
+      <div class="row"><button class="btn" data-act="pickSeat">${ico('upload', 18)}更換圖片</button><button class="btn bad" data-act="delSeat">${ico('trash', 18)}刪除圖片</button></div>`
+      : `<div class="empty">尚未上傳座位表圖片（jpg／png）</div><button class="btn primary" data-act="pickSeat">${ico('upload', 18)}上傳座位表圖片</button>`}</div>
+  <div class="card" style="margin-top:18px"><h3>${ico('link', 24)} 常用連結</h3>
+    ${c.links.length ? c.links.map(l => `<div class="row" style="margin-bottom:10px">
+      <a class="btn yellow" href="${esc(l.url)}" target="_blank" rel="noopener">${ico('link', 18)}${esc(l.name)}</a>
+      <button class="btn sm" data-act="editLink" data-id="${l.id}">${ico('edit', 16)}編輯</button>
+      <button class="btn sm bad" data-act="delLink" data-id="${l.id}">${ico('trash', 16)}刪除</button></div>`).join('') : '<div class="muted" style="margin-bottom:10px">還沒有連結（例如：排座位用的網頁）</div>'}
+    <button class="btn" data-act="addLink">${ico('plus', 18)}新增連結</button></div>`;
+}
+
+/* ----- 分頁 4：角色設定 ----- */
+function studentOptions(c, sel, filterFn) {
+  return `<option value="">（未指定）</option>` + [...c.students].filter(filterFn || (() => true)).sort((a, b) => a.no - b.no)
+    .map(s => `<option value="${s.id}" ${sel === s.id ? 'selected' : ''}>${s.no} ${esc(s.name)}</option>`).join('');
+}
+function roundInfo(c) {
+  const st = S(c), start = new Date(c.roles.roundStart + 'T00:00:00'), end = new Date(start.getTime() + (st.cycle - 1) * 864e5);
+  const nxt = new Date(start.getTime() + st.cycle * 864e5), t0 = new Date(ymd() + 'T00:00:00');
+  return { start: ymd(start), end: ymd(end), left: Math.round((nxt - t0) / 864e5) };
+}
+function vRoles(c) {
+  const r = c.roles, ri = roundInfo(c);
+  const two = (key, label, icon) => `<div class="card"><h3>${ico(icon, 24)} ${label}</h3><div class="row">
+    ${[0, 1].map(i => `<select data-chg="roleList" data-key="${key}" data-i="${i}">${studentOptions(c, r[key][i])}</select>`).join('')}</div></div>`;
+  return `<div class="grid two">
+    <div class="card" style="grid-column:1/-1"><h3>${ico('star', 24)} 小老師</h3>
+      <p class="muted" style="margin-top:0">負責把下週要準備的物品與事項轉告班導，請班導寫進聯絡簿。</p>
+      <div class="row" style="margin-bottom:10px"><select data-chg="teacher">${studentOptions(c, r.teacher)}</select></div>
+      <textarea id="notes" rows="5" placeholder="下週準備事項…（例如：水彩筆、抹布、美勞作品）">${esc(r.notes)}</textarea>
+      <div class="row" style="margin-top:10px"><button class="btn good" data-act="saveNotes">儲存</button>
+        <button class="btn" data-act="copyNotes">${ico('copy', 18)}複製文字</button>
+        <button class="btn yellow" data-act="bigNotes">${ico('expand', 18)}大字顯示</button></div></div>
+    ${two('personal', '個人記分員', 'pencil')}${two('scorers', '小組記分員', 'board')}
+    <div class="card" style="grid-column:1/-1"><h3>${ico('crown', 24)} 小組長</h3>
+      <div class="row" style="margin-bottom:12px"><span class="pill">第 ${r.round} 輪</span><span>${ri.start} ～ ${ri.end}</span>
+        <span class="${ri.left <= 0 ? 'neg' : 'muted'}">${ri.left > 0 ? `距離下次輪替還有 ${ri.left} 天` : '已到輪替時間，可按「自動輪替」'}</span>
+        <button class="btn primary right" data-act="rotate">${ico('swap', 18)}自動輪替</button></div>
+      <div class="grid two" style="gap:10px">${c.groups.map(g => `<div class="row"><span class="tag gtag" style="--gc:${gcolor(c, g)};font-size:16px">${esc(g.name)}</span>
+        <select data-chg="leader" data-gid="${g.id}">${studentOptions(c, r.leaders[g.id], s => s.gid === g.id)}</select></div>`).join('')}</div>
+      <p class="muted small">輪替方式：每組依「分組頁」的組內順序，換下一位擔任；輪到最後一位後從頭開始。也可以直接用下拉選單手動指定。</p>
+      <h4 class="h" style="margin:12px 0 4px">歷屆小組長</h4>
+      ${r.history.length ? [...r.history].reverse().map(h => `<div class="small" style="border-top:2px dashed var(--line);padding:5px 0"><b>第 ${h.round} 輪</b>（${h.start} ～ ${h.end}）：${Object.entries(h.leaders).map(([g, n]) => esc(g) + '：' + esc(n)).join('　')}</div>`).join('') : '<div class="muted small">尚無紀錄</div>'}
+    </div></div>`;
+}
+
+/* ----- 分頁 5：紀錄 ----- */
+function vLogs(c) {
+  const f = UI.filter, sm = Object.fromEntries(c.students.map(s => [s.id, s]));
+  let logs = [...c.logs].sort((a, b) => b.t - a.t).filter(l =>
+    (!f.sid || l.sid === f.sid) && (!f.gid || l.gid === f.gid) && (!f.type || l.type === f.type) && (!f.session || l.session === +f.session));
+  const total = logs.length; logs = logs.slice(0, 300);
+  const sel = (k, opts) => `<select data-chg="filter" data-k="${k}">${opts}</select>`;
+  return `<div class="row" style="margin-bottom:14px">
+    ${sel('sid', `<option value="">全部學生</option>` + [...c.students].sort((a, b) => a.no - b.no).map(s => `<option value="${s.id}" ${f.sid === s.id ? 'selected' : ''}>${s.no} ${esc(s.name)}</option>`).join(''))}
+    ${sel('gid', `<option value="">全部組別</option>` + c.groups.map(g => `<option value="${g.id}" ${f.gid === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join(''))}
+    ${sel('type', `<option value="">全部項目</option>` + Object.entries(TYPE_LABEL).map(([k, v]) => `<option value="${k}" ${f.type === k ? 'selected' : ''}>${v}</option>`).join(''))}
+    ${sel('session', `<option value="">全部節次</option>` + Array.from({ length: c.session }, (_, i) => c.session - i).map(n => `<option value="${n}" ${String(f.session) === String(n) ? 'selected' : ''}>第 ${n} 節</option>`).join(''))}
+    <button class="btn sm bad right" data-act="undo" ${c.logs.length ? '' : 'disabled'}>↶ 復原上一步</button></div>
+  <div class="table-wrap"><table style="min-width:720px"><thead><tr><th>時間</th><th>節</th><th>對象</th><th>項目</th><th>點數</th><th>原因</th><th></th></tr></thead><tbody>
+  ${logs.map(l => { const s = sm[l.sid], g = gobj(c, l.gid); return `<tr><td class="small">${fmt(l.t)}</td><td>${l.session}</td>
+    <td>${l.type === 'group' ? esc(g ? g.name : '（已刪除組別）') : s ? esc(s.name) : '（已刪除）'}</td>
+    <td>${TYPE_LABEL[l.type] || l.type}</td><td class="${l.pts >= 0 ? 'pos' : 'neg'} num" style="font-size:20px">${l.pts > 0 ? '+' : ''}${l.pts}</td>
+    <td class="small">${esc(l.reason)}</td><td><button class="btn xs bad" data-act="delLog" data-id="${l.id}">${ico('trash', 14)}</button></td></tr>`; }).join('') || '<tr><td colspan="7" class="empty">沒有符合的紀錄</td></tr>'}
+  </tbody></table></div>${total > 300 ? `<p class="muted small">僅顯示最新 300 筆（共 ${total} 筆符合）。請用篩選縮小範圍。</p>` : ''}`;
+}
+
+/* ----- 分頁 6：設定 ----- */
+function vSettings(c) {
+  const st = S(c), n = (k, label, unit = '點') => `<label class="row" style="justify-content:space-between;border-bottom:2px dashed var(--line);padding:6px 0">${label}<span><input type="number" min="0" id="set_${k}" value="${st[k]}"> ${unit}</span></label>`;
+  return `<div class="grid two">
+    <div class="card"><h3>點數規則（${esc(c.name)} 班）</h3>
+      ${n('rank1', '下課結算：第 1 名')}${n('rank2', '下課結算：第 2 名')}${n('rank3', '下課結算：第 3 名')}
+      ${n('card', '紙卡（每張）')}${n('selfCheck', '自我檢核達成')}${n('reading', '閱讀單')}${n('deduct', '扣分（每次）')}
+      ${n('gacha', '扭蛋所需點數')}${n('prize', '獎品所需點數')}
+      ${n('convPer', '舊點數換算：每幾點')}${n('convGive', '　　　　　　　換幾點')}${n('convRem', '　　　不滿時的餘數算')}
+      ${n('cycle', '小組長輪替週期', '天')}
+      <div class="row" style="margin-top:14px"><button class="btn primary" data-act="saveSettings">儲存設定</button><button class="btn ghost" data-act="defaultSettings">還原預設值</button></div></div>
+    <div class="card"><h3>扣分原因選單</h3><p class="muted" style="margin-top:0">一行一個原因（「其他」會自動附加）。</p>
+      <textarea id="set_reasons" rows="6">${esc(st.reasons.join('\n'))}</textarea>
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-act="saveSettings">儲存設定</button></div>
+      <div class="sect"><h3>班級</h3><div class="row"><button class="btn" data-act="renameClass" data-id="${c.id}">${ico('edit', 18)}重新命名班級</button></div></div>
+      <div class="sect"><h3 style="color:var(--bad)">危險區</h3>
+        <button class="btn bad" data-act="resetPoints">重設本班所有點數</button>
+        <p class="muted small">會清除本班全部加扣分、結算、兌換、換算紀錄，學生名單與分組不變。</p></div></div></div>`;
+}
+</script>
+
+<script>
+/* =====================================================================
+   動作（所有按鈕的行為都在 ACT 裡，以 data-act 名稱對應）
+   ===================================================================== */
+const stu = (c, id) => c.students.find(s => s.id === id);
+const download = (name, text, type = 'application/json') => {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name;
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+};
+const nameForm = (label, val = '') => `<label class="h">${label}<br><input type="text" id="f_name" value="${esc(val)}" style="width:100%;margin-top:6px"></label>`;
+
+/* ----- 兌換動畫（扭蛋機／禮物盒）----- */
+function showGacha(kind, name) {
+  const gachaSvg = `<svg viewBox="0 0 240 290" fill="none" stroke="#3E3A39" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="50" y="120" width="140" height="140" rx="22" fill="#F2A497"/>
+    <circle cx="120" cy="82" r="64" fill="#E2F1F8"/>
+    <g class="inball"><circle cx="95" cy="92" r="16" fill="#F6D27A"/></g><g class="inball" style="animation-delay:.1s"><circle cx="135" cy="76" r="15" fill="#B9DAA5"/></g><g class="inball" style="animation-delay:.2s"><circle cx="120" cy="104" r="15" fill="#B7A6CF"/></g>
+    <rect x="86" y="214" width="68" height="38" rx="12" fill="#FFFEFB"/>
+    <g class="knob"><circle cx="120" cy="196" r="20" fill="#F6D27A"/><path d="M120 180v32M104 196h32"/></g>
+    <g class="ball"><circle cx="120" cy="232" r="14" fill="#F6D27A"/><path d="M106 232h28"/></g>
+    <path d="M70 262h100" /></svg>`;
+  const giftSvg = `<svg viewBox="0 0 240 290" fill="none" stroke="#3E3A39" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <g class="gift"><rect x="50" y="130" width="140" height="120" rx="12" fill="#A8D3E6"/><path d="M120 130v120"/>
+    <g class="lid"><rect x="40" y="96" width="160" height="38" rx="10" fill="#F2A497"/><path d="M120 96v38M120 96c-18-34-52-24-40 0M120 96c18-34 52-24 40 0"/></g></g></svg>`;
+  const reduce = reduceMotion();
+  return new Promise(res => {
+    const o = document.createElement('div'); o.className = 'overlay top';
+    o.innerHTML = `<div class="dlg card gacha-stage"><h3>${esc(name)} ${kind === 'gacha' ? '轉扭蛋' : '兌換獎品'}！</h3>${kind === 'gacha' ? gachaSvg : giftSvg}
+      <div class="ok">兌換成功！</div><div class="acts" style="justify-content:center"><button class="btn primary" data-x>完成</button></div></div>`;
+    document.body.appendChild(o);
+    setTimeout(() => $('.ok', o).classList.add('done'), reduce ? 50 : 2500);
+    o.addEventListener('click', e => { if (e.target.closest('[data-x]') || e.target === o) { o.remove(); res(); } });
+  });
+}
+
+const ACT = {
+  /* ----- 導覽 ----- */
+  home() { UI.classId = null; UI.sheet = null; UI.batch = false; UI.sel.clear(); render(); },
+  tab(el) { UI.tab = el.dataset.tab; UI.sheet = null; UI.batch = false; UI.sel.clear(); render(); },
+  openClass(el) { UI.classId = el.dataset.id; UI.tab = 'students'; render(); },
+  async newSession() {
+    const c = cls();
+    const warn = c.settled[c.session] ? '' : '\n\n⚠ 本節課還沒有「下課結算」。';
+    if (await confirmBox(`要開始第 ${c.session + 1} 節課嗎？\n本節課的小組秩序分會歸零並開始新的紀錄，個人點數不受影響。${warn}`, { ok: '開始新的一節' })) { c.session++; commit(c); toast(`現在是第 ${c.session} 節課`); }
+  },
+
+  /* ----- 班級 ----- */
+  async addClass() {
+    const v = await formBox('新增班級', nameForm('班級名稱（例：402）'), o => { const n = $('#f_name', o).value.trim(); if (!n) { toast('請輸入班級名稱'); return undefined; } return n; });
+    if (v) { const c = newClass(v); DB.classes[c.id] = c; commit(); }
+  },
+  async renameClass(el) {
+    const c = DB.classes[el.dataset.id];
+    const v = await formBox('重新命名班級', nameForm('班級名稱', c.name), o => { const n = $('#f_name', o).value.trim(); if (!n) { toast('請輸入班級名稱'); return undefined; } return n; });
+    if (v) { c.name = v; commit(); }
+  },
+  async delClass(el) {
+    const c = DB.classes[el.dataset.id];
+    if (await confirmBox(`確定要刪除「${c.name}」班嗎？\n該班 ${c.students.length} 位學生與所有紀錄都會一併刪除，無法復原。`, { danger: true, ok: '刪除班級' })) {
+      delete DB.classes[c.id]; if (UI.classId === c.id) UI.classId = null; commit();
+    }
+  },
+  exportAll() { download(`班級集點備份_${ymd().replace(/-/g, '')}.json`, JSON.stringify({ app: 'classroom-points', exported: new Date().toISOString(), data: DB }, (k, v) => k[0] === '_' ? undefined : v)); },
+  importAll() { $('#fJson').click(); },
+
+  /* ----- 學生 ----- */
+  pickStudents() { $('#fStudents').click(); },
+  async addStudent() { await studentForm(null); },
+  async editStudent(el) { await studentForm(el.dataset.sid); },
+  async delStudent(el) {
+    const c = cls(), s = stu(c, el.dataset.sid);
+    if (!(await confirmBox(`確定要刪除「${s.name}」嗎？\n他的所有加扣分、兌換紀錄也會一併刪除。`, { danger: true, ok: '刪除學生' }))) return;
+    c.students = c.students.filter(x => x.id !== s.id); c.logs = c.logs.filter(l => l.sid !== s.id);
+    const r = c.roles; if (r.teacher === s.id) r.teacher = null;
+    r.personal = r.personal.filter(x => x !== s.id); r.scorers = r.scorers.filter(x => x !== s.id);
+    Object.keys(r.leaders).forEach(g => { if (r.leaders[g] === s.id) delete r.leaders[g]; });
+    UI.sel.delete(s.id); if (UI.sheet && UI.sheet.sid === s.id) UI.sheet = null; commit(c);
+  },
+  async convert(el) {
+    const c = cls(), s = stu(c, el.dataset.sid), inp = $(`.oldin[data-sid="${s.id}"]`);
+    if (!inp || inp.value === '') { toast('請先輸入舊制度點數'); return; }
+    const old = Math.max(0, Math.floor(+inp.value || 0)), add = convertPts(c, old);
+    if (!(await confirmBox(`${s.name}：舊制度 ${old} 點 → 換算為 ${add} 點，加進目前點數。\n每位學生只能換算一次，確定嗎？`, { ok: '換算' }))) return;
+    s.oldPts = old; s.converted = true;
+    if (add > 0) { c.logs.push(mkLog(c, s, 'convert', add, `舊點數 ${old} 點換算`)); fxAward(s.id, add, s.gid); }
+    commit(c);
+  },
+  async resetConvert(el) {
+    const c = cls(), s = stu(c, el.dataset.sid);
+    if (!(await confirmBox(`要重設「${s.name}」的舊點數換算嗎？\n已加進去的換算點數會被扣回，之後可重新換算。`, { danger: true, ok: '重設換算' }))) return;
+    removeLogs(c, c.logs.filter(l => l.sid === s.id && l.type === 'convert').map(l => l.id)); s.converted = false; commit(c);
+  },
+  async convertAll() {
+    const c = cls();
+    $$('.oldin').forEach(i => { const s = stu(c, i.dataset.sid); if (s && !s.converted && i.value !== '') s.oldPts = Math.max(0, Math.floor(+i.value || 0)); });
+    const todo = c.students.filter(s => !s.converted && s.oldPts > 0);
+    if (!todo.length) { toast('沒有需要換算的學生（請先輸入舊制度點數）'); return; }
+    if (!(await confirmBox(`將為 ${todo.length} 位學生換算舊點數（每位只能換算一次），確定嗎？`, { ok: '全班換算' }))) return;
+    const op = uid();
+    todo.forEach(s => { const add = convertPts(c, s.oldPts); s.converted = true; if (add > 0) { c.logs.push(mkLog(c, s, 'convert', add, `舊點數 ${s.oldPts} 點換算`, op)); fxAward(s.id, add, s.gid); } });
+    commit(c);
+  },
+  panel(el) { UI.sheet = { type: 'panel', sid: el.dataset.sid }; render(); },
+  detail(el) { UI.sheet = { type: 'detail', sid: el.dataset.sid }; render(); },
+  closeSheet() { UI.sheet = null; render(); },
+  async redeem(el) {
+    const c = cls(), s = stu(c, el.dataset.sid), kind = el.dataset.kind, cost = S(c)[kind];
+    if (s._pts < cost) { toast('點數不足'); return; }
+    if (!(await confirmBox(`${s.name} 要兌換${kind === 'gacha' ? '扭蛋' : '獎品'}嗎？\n將從目前點數扣除 ${cost} 點（${s._pts} → ${s._pts - cost}）。`, { ok: '兌換' }))) return;
+    c.logs.push(mkLog(c, s, kind, -cost, '')); commit(c);
+    await showGacha(kind, s.name);
+  },
+
+  /* ----- 分組 ----- */
+  member(el) {
+    const id = el.dataset.sid;
+    if (UI.batch) { UI.sel.has(id) ? UI.sel.delete(id) : UI.sel.add(id); render(); } else { UI.sheet = { type: 'panel', sid: id }; render(); }
+  },
+  mvUp(el) { shiftMember(el.dataset.sid, -1); },
+  mvDown(el) { shiftMember(el.dataset.sid, 1); },
+  toggleBatch() { UI.batch = !UI.batch; UI.sel.clear(); render(); },
+  selGroup(el) {
+    const ms = members(cls(), el.dataset.gid), all = ms.every(s => UI.sel.has(s.id));
+    ms.forEach(s => all ? UI.sel.delete(s.id) : UI.sel.add(s.id)); render();
+  },
+  selClear() { UI.sel.clear(); render(); },
+  async batch(el) {
+    const c = cls(), st = S(c), ids = [...UI.sel].filter(id => stu(c, id)), type = el.dataset.type;
+    if (!ids.length) { toast('請先勾選學生'); return; }
+    let pts = { card: st.card, self: st.selfCheck, read: st.reading }[type], reason = '批次';
+    if (type === 'custom') pts = +$('#batchCustom').value;
+    if (type === 'read') {
+      const miss = ids.filter(id => !hasSelfCheck(c, id)).length;
+      if (miss && !(await confirmBox(`有 ${miss} 位學生本節課尚未完成自我檢核，仍要全部加分嗎？`, { ok: '仍要加分' }))) return;
+    }
+    awardMany(ids, type, pts, reason); UI.sel.clear(); toast(`已為 ${ids.length} 位學生 +${pts}`);
+  },
+  async addGroup() {
+    const c = cls(), v = await formBox('新增組別', nameForm('組別名稱', `第${c.groups.length + 1}組`), o => { const n = $('#f_name', o).value.trim(); return n || (toast('請輸入名稱'), undefined); });
+    if (v) { c.groups.push({ id: uid(), name: v, ci: c.groups.length }); commit(c); }
+  },
+  async renameGroup(el) {
+    const c = cls(), g = gobj(c, el.dataset.gid), v = await formBox('重新命名組別', nameForm('組別名稱', g.name), o => { const n = $('#f_name', o).value.trim(); return n || (toast('請輸入名稱'), undefined); });
+    if (v) { g.name = v; commit(c); }
+  },
+  async delGroup(el) {
+    const c = cls(), g = gobj(c, el.dataset.gid);
+    if (!(await confirmBox(`確定刪除「${g.name}」嗎？\n組員會移到「未分組」，該組的小組秩序分紀錄也會刪除。`, { danger: true, ok: '刪除組別' }))) return;
+    c.students.forEach(s => { if (s.gid === g.id) s.gid = null; });
+    c.logs = c.logs.filter(l => !(l.type === 'group' && l.gid === g.id));
+    c.groups = c.groups.filter(x => x.id !== g.id); delete c.roles.leaders[g.id]; commit(c);
+  },
+  gscore(el) {
+    const c = cls(), g = gobj(c, el.dataset.gid), v = +el.dataset.v;
+    const l = mkLog(c, null, 'group', v, ''); l.gid = g.id; c.logs.push(l);
+    if (v > 0) { UI.fx.bump.push('g:' + g.id); UI.fx.float.push({ k: 'g:' + g.id, t: '+' + v, c: 'good' }); } else UI.fx.shake.push('card:' + g.id);
+    commit(c);
+  },
+  async settle() {
+    const c = cls(), rk = ranks(c), gs = c.groups.filter(g => rk[g.id]).sort((a, b) => rk[a.id].rank - rk[b.id].rank || c.groups.indexOf(a) - c.groups.indexOf(b));
+    if (!gs.length) { await alertBox('目前沒有任何有組員的組別可以結算。'); return; }
+    const rows = gs.map(g => ({ g, n: members(c, g.id).length, ...rk[g.id], bonus: bonusFor(c, rk[g.id].rank, rk[g.id].score) }));
+    const done = !!c.settled[c.session];
+    const table = `<div class="table-wrap"><table style="min-width:0"><thead><tr><th>名次</th><th>組別</th><th>秩序分</th><th>每位組員</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td class="num">${r.rank}</td><td>${esc(r.g.name)}（${r.n} 人）</td><td class="num">${r.score}</td><td class="${r.bonus ? 'pos' : 'muted'}">${r.bonus ? '+' + r.bonus : '不加分'}</td></tr>`).join('')}</tbody></table></div>`;
+    if (done) { await alertBox('本節課已結算。\n如需重算，請先按「取消本節結算」。', '已結算'); return; }
+    const ok = await dialog(`<h3>下課結算預覽（第 ${c.session} 節）</h3>${table}
+      <p class="muted small">確認後會把點數加到各組員的個人點數，每節課只能結算一次。同分名次相同。</p>
+      <div class="acts"><button class="btn ghost" data-d="no">取消</button><button class="btn primary" data-d="ok">確認結算</button></div>`);
+    if (!ok) return;
+    const op = uid(), map = {};
+    rows.forEach(r => {
+      if (r.bonus <= 0) return; map[r.g.id] = r.rank;
+      members(c, r.g.id).forEach(s => { c.logs.push(mkLog(c, s, 'settle', r.bonus, `第${r.rank}名（${r.g.name}）`, op)); fxAward(s.id, r.bonus, s.gid); });
+    });
+    c.settled[c.session] = map; commit(c); toast('結算完成！');
+  },
+  async unsettle() {
+    const c = cls();
+    if (!(await confirmBox(`取消第 ${c.session} 節的結算？\n已加給組員的結算點數會被扣回。`, { danger: true, ok: '取消結算' }))) return;
+    removeLogs(c, c.logs.filter(l => l.type === 'settle' && l.session === c.session).map(l => l.id)); delete c.settled[c.session]; commit(c);
+  },
+
+  /* ----- 個人面板 ----- */
+  'p-card'(el) { const c = cls(), q = Math.max(1, Math.floor(+$('#pQty').value || 1)); award(el.dataset.sid, 'card', S(c).card * q, `${q} 張`); },
+  'p-self'(el) { award(el.dataset.sid, 'self', S(cls()).selfCheck, ''); },
+  async 'p-read'(el) {
+    const c = cls(), id = el.dataset.sid;
+    if (!hasSelfCheck(c, id) && !(await confirmBox('這位學生本節課尚未完成自我檢核，仍要加分嗎？', { title: '提醒', ok: '仍要加分' }))) return;
+    award(id, 'read', S(c).reading, '');
+  },
+  'p-deduct'(el) {
+    const c = cls(), sel = $('#pReason').value; let reason = sel;
+    if (sel === '__other') { reason = $('#pOther').value.trim(); if (!reason) { toast('請輸入扣分原因'); return; } }
+    award(el.dataset.sid, 'deduct', -S(c).deduct, reason);
+  },
+  'p-custom'(el) { award(el.dataset.sid, 'custom', +el.dataset.v, ''); },
+
+  /* ----- 座位表 ----- */
+  pickSeat() { $('#fSeat').click(); },
+  async delSeat() { if (await confirmBox('確定刪除座位表圖片嗎？', { danger: true, ok: '刪除圖片' })) { const c = cls(); c.seat = null; commit(c); } },
+  fsSeat() {
+    const v = $('#fsView'); $('img', v).src = cls().seat; v.style.display = 'flex';
+    if (v.requestFullscreen) v.requestFullscreen().catch(() => {});
+  },
+  async addLink() { await linkForm(null); },
+  async editLink(el) { await linkForm(el.dataset.id); },
+  async delLink(el) { const c = cls(); if (await confirmBox('確定刪除這個連結嗎？', { danger: true, ok: '刪除' })) { c.links = c.links.filter(l => l.id !== el.dataset.id); commit(c); } },
+
+  /* ----- 角色 ----- */
+  saveNotes() { const c = cls(); c.roles.notes = $('#notes').value; commit(c); toast('已儲存'); },
+  async copyNotes() {
+    const t = $('#notes').value;
+    try { await navigator.clipboard.writeText(t); } catch (e) { const ta = $('#notes'); ta.select(); document.execCommand('copy'); }
+    toast('已複製文字');
+  },
+  bigNotes() {
+    const b = $('#bigText'); $('.t', b).textContent = $('#notes').value || '（尚未輸入事項）'; b.style.display = 'block';
+    if (b.requestFullscreen) b.requestFullscreen().catch(() => {});
+  },
+  async rotate() {
+    const c = cls(), r = c.roles;
+    if (!(await confirmBox('每組換下一位同學擔任小組長（輪到最後一位後從頭開始），並開始新的一輪。確定嗎？', { ok: '自動輪替' }))) return;
+    const hadAny = c.groups.some(g => r.leaders[g.id]), old = {};
+    c.groups.forEach(g => { const l = stu(c, r.leaders[g.id]); if (l) old[g.name] = l.name; });
+    c.groups.forEach(g => {
+      const ms = members(c, g.id); if (!ms.length) return;
+      const i = ms.findIndex(s => s.id === r.leaders[g.id]); r.leaders[g.id] = ms[(i + 1) % ms.length].id;
+    });
+    if (hadAny) { r.history.push({ round: r.round, start: r.roundStart, end: ymd(), leaders: old }); r.round++; }
+    r.roundStart = ymd(); commit(c); toast('已輪替小組長');
+  },
+
+  /* ----- 紀錄 ----- */
+  async undo() {
+    const c = cls(), last = [...c.logs].sort((a, b) => b.t - a.t)[0]; if (!last) return;
+    const ids = c.logs.filter(l => l.op === last.op).map(l => l.id), s = stu(c, last.sid);
+    if (!(await confirmBox(`復原上一步：${TYPE_LABEL[last.type]}${ids.length > 1 ? `（共 ${ids.length} 筆）` : s ? '（' + s.name + '）' : ''}？`, { danger: true, ok: '復原' }))) return;
+    removeLogs(c, ids); commit(c);
+  },
+  async delLog(el) {
+    const c = cls(), l = c.logs.find(x => x.id === el.dataset.id); if (!l) return;
+    if (!(await confirmBox(`刪除這筆「${TYPE_LABEL[l.type]} ${l.pts > 0 ? '+' : ''}${l.pts}」紀錄？\n相關點數會重新計算。`, { danger: true, ok: '刪除紀錄' }))) return;
+    removeLogs(c, [l.id]); commit(c);
+  },
+
+  /* ----- 設定 ----- */
+  saveSettings() {
+    const c = cls(), st = { ...S(c) };
+    for (const k of ['rank1', 'rank2', 'rank3', 'card', 'selfCheck', 'reading', 'deduct', 'gacha', 'prize', 'convPer', 'convGive', 'convRem', 'cycle']) {
+      const v = Math.floor(+$('#set_' + k).value); if (!(v >= 0)) { toast('請輸入正確的數字'); return; } st[k] = v;
+    }
+    if (st.gacha < 1 || st.prize < 1 || st.convPer < 1 || st.cycle < 1) { toast('扭蛋、獎品、換算單位、週期不可為 0'); return; }
+    st.reasons = $('#set_reasons').value.split('\n').map(x => x.trim()).filter(Boolean);
+    c.settings = st; commit(c); toast('設定已儲存');
+  },
+  async defaultSettings() { const c = cls(); if (await confirmBox('要還原成預設的點數規則嗎？', { ok: '還原' })) { c.settings = clone(CONFIG.defaults); commit(c); } },
+  async resetPoints() {
+    const c = cls();
+    if (!(await confirmBox(`⚠ 要重設「${c.name}」班所有點數嗎？\n所有加扣分、結算、兌換、換算紀錄都會清除。`, { danger: true, ok: '繼續' }))) return;
+    if (!(await confirmBox('再確認一次：此動作無法復原，建議先到首頁匯出備份。真的要全部歸零嗎？', { danger: true, ok: '全部歸零' }))) return;
+    c.logs = []; c.settled = {}; c.students.forEach(s => s.converted = false); commit(c); toast('已重設本班所有點數');
+  },
+
+  /* ----- 雲端 ----- */
+  login() { window.__cloudLogin ? window.__cloudLogin() : alertBox('尚未設定 Firebase。請參考檔案最上方的中文步驟，填入 firebaseConfig。'); },
+  logout() { window.__cloudLogout && window.__cloudLogout(); }
+};
+
+/* 小組內順序：上移／下移 */
+function shiftMember(sid, d) {
+  const c = cls(), s = stu(c, sid), ms = members(c, s.gid || ''), i = ms.findIndex(x => x.id === sid), j = i + d;
+  if (j < 0 || j >= ms.length) return;
+  ms.forEach((x, k) => x.order = k * 10); [ms[i].order, ms[j].order] = [ms[j].order, ms[i].order]; commit(c);
+}
+/* 拖曳／換組 */
+function moveStudent(sid, gid, beforeSid) {
+  const c = cls(), s = stu(c, sid); if (!s) return;
+  const oldG = s.gid, target = members(c, gid).filter(x => x.id !== sid);
+  let idx = beforeSid ? target.findIndex(x => x.id === beforeSid) : -1; if (idx < 0) idx = target.length;
+  target.splice(idx, 0, s); s.gid = gid || null; target.forEach((x, i) => x.order = i * 10);
+  if (oldG && oldG !== s.gid && c.roles.leaders[oldG] === sid) delete c.roles.leaders[oldG];
+  commit(c);
+}
+async function studentForm(sid) {
+  const c = cls(), s = sid ? stu(c, sid) : null, nextNo = (Math.max(0, ...c.students.map(x => x.no)) + 1);
+  const v = await formBox(s ? '編輯學生' : '新增學生', `<div class="stack">
+    <label class="h">座號 <input type="number" id="f_no" value="${s ? s.no : nextNo}" min="1"></label>
+    <label class="h">姓名 <input type="text" id="f_name" value="${esc(s ? s.name : '')}"></label>
+    <label class="h">組別 <select id="f_gid"><option value="">未分組</option>${c.groups.map(g => `<option value="${g.id}" ${s && s.gid === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label></div>`,
+    o => {
+      const no = noNum($('#f_no', o).value), name = $('#f_name', o).value.trim();
+      if (!(no > 0) || !name) { toast('請輸入座號與姓名'); return undefined; }
+      if (c.students.some(x => x.no === no && (!s || x.id !== s.id))) { toast(`座號 ${no} 已經有人了`); return undefined; }
+      return { no, name, gid: $('#f_gid', o).value || null };
+    });
+  if (!v) return;
+  if (s) { if (s.gid !== v.gid && c.roles.leaders[s.gid] === s.id) delete c.roles.leaders[s.gid]; Object.assign(s, v); }
+  else c.students.push({ id: uid(), no: v.no, name: v.name, gid: v.gid, order: v.no, oldPts: null, converted: false });
+  commit(c);
+}
+async function linkForm(id) {
+  const c = cls(), l = id ? c.links.find(x => x.id === id) : null;
+  const v = await formBox(l ? '編輯連結' : '新增連結', `<div class="stack"><label class="h">名稱 <input type="text" id="f_name" value="${esc(l ? l.name : '')}" style="width:100%"></label>
+    <label class="h">網址 <input type="text" id="f_url" value="${esc(l ? l.url : '')}" placeholder="https://" style="width:100%"></label></div>`, o => {
+    const name = $('#f_name', o).value.trim(); let url = $('#f_url', o).value.trim();
+    if (!name || !url) { toast('請輸入名稱與網址'); return undefined; }
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url.replace(/^[a-z]+:\/*/i, ''); return { name, url };
+  });
+  if (!v) return;
+  if (l) Object.assign(l, v); else c.links.push({ id: uid(), ...v });
+  commit(c);
+}
+
+/* =====================================================================
+   匯入學生名單（Excel / CSV / Word）
+   ===================================================================== */
+function rowsToStudents(rows) {
+  let ci = { no: 0, name: 1 }, start = 0, header = false;
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const r = (rows[i] || []).map(x => String(x).trim());
+    const a = r.findIndex(x => /座號|號碼/.test(x)), b = r.findIndex(x => /姓名|名字|學生/.test(x));
+    if (a >= 0 && b >= 0 && a !== b) { ci = { no: a, name: b }; start = i + 1; header = true; break; }
+  }
+  const out = [], seen = new Set();
+  for (let i = start; i < rows.length; i++) {
+    const r = rows[i] || [], no = noNum(String(r[ci.no] ?? '').trim()), name = String(r[ci.name] ?? '').trim();
+    if (!(no > 0) || !name || seen.has(no)) continue;
+    seen.add(no); out.push({ no, name });
+  }
+  return out.sort((a, b) => a.no - b.no);
+}
+async function parseStudentFile(file) {
+  const nm = file.name.toLowerCase(), buf = await file.arrayBuffer();
+  if (nm.endsWith('.docx')) {
+    const { value: html } = await mammoth.convertToHtml({ arrayBuffer: buf });
+    const doc = new DOMParser().parseFromString(html, 'text/html'), trs = $$('tr', doc);
+    if (trs.length) return rowsToStudents(trs.map(tr => [...tr.children].map(td => td.textContent.trim())));
+    const lines = [...doc.body.children].flatMap(el => el.textContent.split('\n')), rows = [];
+    lines.forEach(t => { const m = t.trim().match(/^(\d{1,3})[\s.、,，:：\-)）]*\s*([^\d\s].*?)\s*$/); if (m) rows.push([m[1], m[2]]); });
+    return rowsToStudents(rows);
+  }
+  let wb;
+  if (nm.endsWith('.csv')) {
+    let t = new TextDecoder('utf-8').decode(buf);
+    if (t.includes('�')) { try { t = new TextDecoder('big5').decode(buf); } catch (e) {} }
+    wb = XLSX.read(t.replace(/^﻿/, ''), { type: 'string' });
+  } else wb = XLSX.read(buf, { type: 'array' });
+  return rowsToStudents(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '', raw: false }));
+}
+async function importStudents(file) {
+  const c = cls(); let list;
+  try { list = await parseStudentFile(file); } catch (e) { console.error(e); await alertBox('讀取檔案失敗：' + e.message, '匯入失敗'); return; }
+  if (!list.length) { await alertBox('找不到「座號」與「姓名」。\n請確認檔案內容（Excel 找不到標題時，會把第一欄當座號、第二欄當姓名）。', '沒有讀到學生'); return; }
+  const has = c.students.length > 0;
+  const mode = await formBox(`匯入預覽（共 ${list.length} 位）`,
+    `<div class="table-wrap" style="max-height:34vh;overflow:auto"><table style="min-width:0"><thead><tr><th>座號</th><th>姓名</th></tr></thead><tbody>${list.map(s => `<tr><td class="num">${s.no}</td><td>${esc(s.name)}</td></tr>`).join('')}</tbody></table></div>
+    ${has ? `<div class="notice" style="margin-top:12px"><b>班上已經有 ${c.students.length} 位學生，要怎麼處理？</b><br>
+      <label><input type="radio" name="imode" value="append" checked> 新增（座號重複者略過）</label><br>
+      <label><input type="radio" name="imode" value="replace"> 覆蓋（清除原名單，<b>連同所有點數紀錄</b>）</label></div>` : ''}`,
+    o => has ? $('input[name=imode]:checked', o).value : 'append', '確認匯入');
+  if (!mode) return;
+  if (mode === 'replace') {
+    if (!(await confirmBox('覆蓋會刪除原有學生、分組、角色指派與所有點數紀錄，無法復原。確定嗎？', { danger: true, ok: '確定覆蓋' }))) return;
+    c.students = []; c.logs = []; c.settled = {}; c.roles = { ...c.roles, teacher: null, personal: [], scorers: [], leaders: {}, history: [] };
+  }
+  const have = new Set(c.students.map(s => s.no)); let add = 0;
+  list.forEach(s => { if (have.has(s.no)) return; c.students.push({ id: uid(), no: s.no, name: s.name, gid: null, order: s.no, oldPts: null, converted: false }); add++; });
+  commit(c); toast(`已匯入 ${add} 位學生`);
+}
+
+/* 座位表圖片壓縮（轉成 JPEG base64，必要時逐步縮小）*/
+async function compressImg(file) {
+  const url = URL.createObjectURL(file);
+  const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('無法讀取圖片')); i.src = url; });
+  let w = Math.min(img.width, CONFIG.seatImgMaxWidth), q = 0.82, out;
+  for (let k = 0; k < 10; k++) {
+    const h = Math.round(img.height * w / img.width), cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
+    out = cv.toDataURL('image/jpeg', q); if (out.length <= CONFIG.seatImgMaxChars) break;
+    q = Math.max(0.5, q - 0.08); w = Math.round(w * 0.82);
+  }
+  URL.revokeObjectURL(url); return out;
+}
+
+/* =====================================================================
+   事件綁定
+   ===================================================================== */
+document.addEventListener('click', async e => {
+  if (e.target.id === 'sheet') { ACT.closeSheet(); return; }
+  const el = e.target.closest('[data-act]'); if (!el || el.disabled || el.classList.contains('dis')) return;
+  const f = ACT[el.dataset.act];
+  if (f) { try { await f(el, e); } catch (err) { console.error(err); toast('發生錯誤：' + err.message); } }
+});
+document.addEventListener('change', async e => {
+  const t = e.target, c = cls();
+  if (t.classList && t.classList.contains('oldin')) { const s = stu(c, t.dataset.sid); if (s) { s.oldPts = t.value === '' ? null : Math.max(0, Math.floor(+t.value)); DB.touched = true; persistLocal(); window.__cloudPush && window.__cloudPush(); } return; }
+  const k = t.dataset && t.dataset.chg; if (!k) return;
+  if (k === 'filter') { UI.filter[t.dataset.k] = t.value; render(); return; }
+  if (k === 'moveTo') { moveStudent(t.dataset.sid, t.value); return; }
+  const r = c.roles;
+  if (k === 'teacher') r.teacher = t.value || null;
+  else if (k === 'leader') { t.value ? r.leaders[t.dataset.gid] = t.value : delete r.leaders[t.dataset.gid]; }
+  else if (k === 'roleList') r[t.dataset.key] = [...new Set($$(`select[data-key="${t.dataset.key}"]`).map(x => x.value).filter(Boolean))];
+  commit(c);
+});
+$('#fStudents').addEventListener('change', async e => { const f = e.target.files[0]; e.target.value = ''; if (f) await importStudents(f); });
+$('#fSeat').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try { const c = cls(); c.seat = await compressImg(f); commit(c); toast('座位表已更新'); } catch (err) { toast('圖片處理失敗：' + err.message); }
+});
+$('#fJson').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try {
+    const j = JSON.parse(await f.text()), d = j.data || j;
+    if (!d.classes || typeof d.classes !== 'object') throw new Error('不是本系統的備份檔');
+    if (!(await confirmBox(`備份內有 ${Object.keys(d.classes).length} 個班級。\n匯入會「取代」目前全部資料，確定嗎？`, { danger: true, ok: '匯入並取代' }))) return;
+    DB = { v: 1, classes: d.classes, touched: true }; Object.values(DB.classes).forEach(recompute); UI.classId = null; commit();
+    toast('備份已匯入');
+  } catch (err) { await alertBox('匯入失敗：' + err.message, '匯入失敗'); }
+});
+/* 拖曳換組／排序（滑鼠；平板請用 ▲▼ 或個人面板的「換組」）*/
+let dragSid = null;
+document.addEventListener('dragstart', e => { const li = e.target.closest && e.target.closest('li.mem'); if (li) { dragSid = li.dataset.sid; e.dataTransfer.setData('text/plain', dragSid); e.dataTransfer.effectAllowed = 'move'; } });
+document.addEventListener('dragover', e => { const ul = e.target.closest && e.target.closest('.members'); if (ul && dragSid) { e.preventDefault(); $$('.members.over').forEach(x => x.classList.remove('over')); ul.classList.add('over'); } });
+document.addEventListener('dragend', () => { dragSid = null; $$('.members.over').forEach(x => x.classList.remove('over')); });
+document.addEventListener('drop', e => {
+  const ul = e.target.closest && e.target.closest('.members'); if (!ul || !dragSid) return; e.preventDefault();
+  const li = e.target.closest('li.mem'), before = li && li.dataset.sid !== dragSid ? li.dataset.sid : null, id = dragSid; dragSid = null;
+  moveStudent(id, ul.dataset.drop, before);
+});
+/* 全螢幕圖片／大字顯示的關閉 */
+$('#fsView').addEventListener('click', () => { $('#fsView').style.display = 'none'; if (document.fullscreenElement) document.exitFullscreen(); });
+$('#bigText').addEventListener('click', () => { $('#bigText').style.display = 'none'; if (document.fullscreenElement) document.exitFullscreen(); });
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) { $('#fsView').style.display = 'none'; $('#bigText').style.display = 'none'; } });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if ($('#fsView').style.display === 'flex' || $('#bigText').style.display === 'block') { $('#fsView').style.display = 'none'; $('#bigText').style.display = 'none'; return; }
+  if (UI.sheet && !$('.overlay.top')) ACT.closeSheet();
+});
+
+/* =====================================================================
+   與雲端模組溝通的橋接（Firebase 部分見下方 script）
+   ===================================================================== */
+const PIECE = {
+  class: c => ({ name: c.name, created: c.created, settings: c.settings, groups: c.groups, roles: c.roles, links: c.links, session: c.session, settled: c.settled }),
+  student: s => ({ id: s.id, no: s.no, name: s.name, gid: s.gid || null, order: s.order ?? s.no, oldPts: s.oldPts ?? null, converted: !!s.converted }),
+  log: l => ({ id: l.id, t: l.t, op: l.op || '', session: l.session, sid: l.sid || null, gid: l.gid || null, type: l.type, pts: l.pts, reason: l.reason || '' }),
+  seat: c => ({ img: c.seat })
+};
+function allPieces(c) {
+  const m = {}, b = 'classes/' + c.id;
+  m[b] = PIECE.class(c);
+  c.students.forEach(s => m[`${b}/students/${s.id}`] = PIECE.student(s));
+  c.logs.forEach(l => m[`${b}/logs/${l.id}`] = PIECE.log(l));
+  if (c.seat) m[`${b}/seat/main`] = PIECE.seat(c);
+  return m;
+}
+let pendingRender = false, refreshT = null;
+document.addEventListener('focusout', () => { if (pendingRender) setTimeout(() => { const a = document.activeElement; if (!(a && /INPUT|TEXTAREA|SELECT/.test(a.tagName))) { pendingRender = false; render(); } }, 80); });
+window.__app = {
+  db: () => DB,
+  getClass: id => DB.classes[id],
+  ensureClass(id) {
+    if (!DB.classes[id]) { const c = newClass(''); c.id = id; c.groups = []; c.name = '…'; DB.classes[id] = c; }
+    return DB.classes[id];
+  },
+  applyMeta(c, d) {
+    c.name = d.name ?? c.name; c.created = d.created ?? c.created; c.settings = d.settings || c.settings; c.groups = d.groups || [];
+    c.roles = { teacher: null, notes: '', personal: [], scorers: [], leaders: {}, round: 1, roundStart: ymd(), history: [], ...(d.roles || {}) };
+    c.links = d.links || []; c.session = d.session || 1; c.settled = d.settled || {};
+  },
+  removeClass(id) { if (DB.classes[id]) { delete DB.classes[id]; if (UI.classId === id) UI.classId = null; } },
+  upsertStudent(c, d) { const i = c.students.findIndex(s => s.id === d.id); if (i >= 0) Object.assign(c.students[i], d); else c.students.push({ ...d }); return d; },
+  removeStudent(c, id) { c.students = c.students.filter(s => s.id !== id); },
+  upsertLog(c, d) { const i = c.logs.findIndex(l => l.id === d.id); if (i >= 0) c.logs[i] = { ...d }; else c.logs.push({ ...d }); return d; },
+  removeLog(c, id) { c.logs = c.logs.filter(l => l.id !== id); },
+  setSeat(c, img) { c.seat = img || null; },
+  pieceObj(c, kind, id) {
+    if (kind === 'class') return PIECE.class(c);
+    if (kind === 'seat') return PIECE.seat(c);
+    if (kind === 'student') return PIECE.student(c.students.find(s => s.id === id));
+    return PIECE.log(c.logs.find(l => l.id === id));
+  },
+  allPieces,
+  clearAll() { DB = { v: 1, classes: {}, touched: false }; UI.classId = null; },
+  seed() { const s = seedDB(); DB.classes = s.classes; },
+  refresh() {
+    clearTimeout(refreshT);
+    refreshT = setTimeout(() => {
+      Object.values(DB.classes).forEach(recompute); persistLocal();
+      const a = document.activeElement;
+      if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && $('#app').contains(a)) { pendingRender = true; return; }
+      render();
+    }, 60);
+  },
+  setSync, setUser, toast, confirm: confirmBox, alert: alertBox
+};
+
+/* 啟動 */
+render();
+</script>
+
+<script>
+/* =====================================================================
+   Firebase 雲端同步（Authentication：Google 登入；Cloud Firestore：即時同步＋離線快取）
+   資料結構：users/{uid}/classes/{classId}
+               ├ 班級文件：名稱、設定、組別、角色、連結、節次、結算狀態
+               ├ students/{id}  每位學生一份文件
+               ├ logs/{id}      每筆加扣分／結算／兌換紀錄一份文件
+               └ seat/main      座位表圖片（壓縮後 base64，<700KB）
+   沒填 firebaseConfig 時，這段不會啟動，系統以純本機模式運作。
+   ===================================================================== */
+(function () {
+  const A = window.__app, cfg = window.FIREBASE_CONFIG;
+  if (!cfg || !cfg.apiKey) { A.setSync('nocfg'); return; }
+  let fb = null, auth, db, user = null, active = false, pending = 0, cache = {}, unsubs = [], subs = {}, pushT = null, seeded = false;
+
+  const status = () => { if (user) A.setSync(!navigator.onLine ? 'offline' : pending > 0 ? 'syncing' : 'synced'); };
+  addEventListener('online', status); addEventListener('offline', status);
+  const track = p => { pending++; status(); p.then(() => { pending--; status(); }, e => { pending--; console.warn(e); status(); }); };
+
+  async function boot() {
+    try {
+      const V = '10.12.2', base = `https://www.gstatic.com/firebasejs/${V}/`;
+      const [appM, authM, fsM] = await Promise.all([import(base + 'firebase-app.js'), import(base + 'firebase-auth.js'), import(base + 'firebase-firestore.js')]);
+      fb = { ...authM, ...fsM };
+      const app = appM.initializeApp(cfg);
+      auth = authM.getAuth(app);
+      try { db = fsM.initializeFirestore(app, { localCache: fsM.persistentLocalCache({ tabManager: fsM.persistentMultipleTabManager() }) }); }
+      catch (e) { console.warn('離線快取無法啟用', e); db = fsM.getFirestore(app); }
+    } catch (e) { console.warn(e); A.toast('無法載入 Firebase（可能沒有網路），先以本機模式運作'); A.setSync('local'); return; }
+    fb.onAuthStateChanged(auth, onUser);
+  }
+
+  window.__cloudLogin = async () => {
+    if (location.protocol === 'file:') { A.alert('Google 登入無法在直接雙擊開啟的檔案（file://）上使用。\n\n請把網頁放到 GitHub Pages / Firebase Hosting 等網站空間，或在資料夾內執行\npython -m http.server 8000\n再開啟 http://localhost:8000/ 。', '需要用網址開啟'); return; }
+    if (!fb) { A.toast('Firebase 尚未載入完成'); return; }
+    try { await fb.signInWithPopup(auth, new fb.GoogleAuthProvider()); }
+    catch (e) { if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') A.alert('登入失敗：' + (e.code || e.message) + '\n請確認 Authentication 已啟用 Google，且「已授權的網域」包含目前網址。', '登入失敗'); }
+  };
+  window.__cloudLogout = async () => {
+    if (await A.confirm('登出後，這台電腦仍保留已同步的資料，但不會再與雲端同步。\n確定登出？', { ok: '登出' })) await fb.signOut(auth);
+  };
+
+  function stopAll() { unsubs.forEach(u => u()); unsubs = []; Object.values(subs).forEach(l => l.forEach(u => u())); subs = {}; }
+
+  async function onUser(u) {
+    stopAll(); user = u; active = false; cache = {}; seeded = false;
+    if (!u) { A.setUser(null); A.setSync('local'); return; }
+    A.setUser(u); A.setSync('syncing');
+    const key = 'cc_cloud_choice_' + u.uid, D = A.db();
+    if (!localStorage.getItem(key)) {
+      if (D.touched && Object.keys(D.classes).length) {
+        const up = await A.confirm('偵測到這台電腦的瀏覽器裡已經有班級資料。\n\n要把這些資料上傳到你的雲端帳號嗎？\n（選「不上傳」會改用雲端上的資料，這台電腦的舊資料將從畫面移除。）', { title: '上傳本機資料到雲端？', ok: '上傳到雲端' });
+        if (up) localStorage.setItem(key, 'up');
+        else {
+          if (!(await A.confirm('確定不上傳？這台電腦的舊資料會被捨棄（若尚未備份，建議先取消登入並到首頁匯出備份）。', { danger: true, ok: '捨棄本機資料' }))) { await fb.signOut(auth); return; }
+          localStorage.setItem(key, 'skip'); A.clearAll();
+        }
+      } else { localStorage.setItem(key, 'fresh'); A.clearAll(); }
+    }
+    active = true; listen();
+    setTimeout(() => window.__cloudPush(), 1500);   // 補上傳本機尚未在雲端的資料
+    A.refresh();
+  }
+
+  /* ----- 上傳：只送出和上次不同的文件，並刪除已不存在的文件 ----- */
+  window.__cloudPush = () => { if (!user || !active) return; clearTimeout(pushT); pushT = setTimeout(doPush, 250); };
+  function doPush() {
+    if (!user || !active) return;
+    const base = `users/${user.uid}/`, seen = new Set();
+    Object.values(A.db().classes).forEach(c => {
+      Object.entries(A.allPieces(c)).forEach(([path, obj]) => {
+        seen.add(path); const str = JSON.stringify(obj);
+        if (cache[path] !== str) { cache[path] = str; track(fb.setDoc(fb.doc(db, base + path), JSON.parse(str))); }
+      });
+    });
+    Object.keys(cache).forEach(path => { if (!seen.has(path)) { delete cache[path]; track(fb.deleteDoc(fb.doc(db, base + path))); } });
+  }
+
+  /* ----- 下載：onSnapshot 即時同步 ----- */
+  function listen() {
+    const base = `users/${user.uid}/classes`;
+    unsubs.push(fb.onSnapshot(fb.collection(db, base), snap => {
+      snap.docChanges().forEach(ch => {
+        const id = ch.doc.id;
+        if (ch.type === 'removed') { (subs[id] || []).forEach(u => u()); delete subs[id]; Object.keys(cache).forEach(k => { if (k.startsWith('classes/' + id)) delete cache[k]; }); A.removeClass(id); return; }
+        const c = A.ensureClass(id); A.applyMeta(c, ch.doc.data());
+        cache['classes/' + id] = JSON.stringify(A.pieceObj(c, 'class'));
+        if (!subs[id]) listenClass(id);
+      });
+      if (!seeded && !snap.metadata.fromCache && snap.empty && !Object.keys(A.db().classes).length) { seeded = true; A.seed(); window.__cloudPush(); }
+      A.refresh(); status();
+    }, err => { console.warn(err); A.toast('雲端讀取失敗：' + err.code); }));
+  }
+  function listenClass(id) {
+    const base = `users/${user.uid}/classes/${id}`, list = [];
+    const sub = (name, onAdd, onDel) => list.push(fb.onSnapshot(fb.collection(db, `${base}/${name}`), snap => {
+      const c = A.getClass(id); if (!c) return;
+      snap.docChanges().forEach(ch => {
+        const path = `classes/${id}/${name}/${ch.doc.id}`;
+        if (ch.type === 'removed') { onDel(c, ch.doc.id); delete cache[path]; } else { onAdd(c, { ...ch.doc.data(), id: ch.doc.id }, path); }
+      });
+      A.refresh(); status();
+    }, err => console.warn(name, err)));
+    sub('students', (c, d, path) => { A.upsertStudent(c, d); cache[path] = JSON.stringify(A.pieceObj(c, 'student', d.id)); }, (c, i) => A.removeStudent(c, i));
+    sub('logs', (c, d, path) => { A.upsertLog(c, d); cache[path] = JSON.stringify(A.pieceObj(c, 'log', d.id)); }, (c, i) => A.removeLog(c, i));
+    sub('seat', (c, d, path) => { A.setSeat(c, d.img); cache[path] = JSON.stringify(A.pieceObj(c, 'seat')); }, (c) => A.setSeat(c, null));
+    subs[id] = list;
+  }
+
+  A.setSync('local');
+  boot();
+})();
+</script>
+</body>
+</html>
