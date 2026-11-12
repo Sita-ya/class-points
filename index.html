@@ -274,10 +274,17 @@ td.nm a{cursor:pointer;color:var(--ink);text-decoration:none;border-bottom:2px d
 const CONFIG = {
   defaults: {
     rank1: 3, rank2: 2, rank3: 1,     // 下課結算：第 1、2、3 名每位組員加幾點
-    card: 1,                           // 紙卡（每張）
-    selfCheck: 2,                      // 自我檢核達成
-    reading: 2,                        // 閱讀單
-    deduct: 1,                         // 扣分（每次扣幾點）
+    /* 個人加點規則（可在「設定」頁增減）：qty＝可選 1～10 張／次數；needSelf＝需先完成自我檢核，否則提醒 */
+    personalRules: [
+      { id: 'card', name: '個人加點獎勵紙卡', pts: 1, qty: true, needSelf: false },
+      { id: 'self', name: '自我檢核章', pts: 2, qty: false, needSelf: false },
+      { id: 'read', name: '閱讀學習單', pts: 2, qty: false, needSelf: true }
+    ],
+    /* 組別加點規則（只加分，用來決定本節課小組排名，可在「設定」頁增減）*/
+    groupRules: [
+      { id: 'g1', name: '+1', pts: 1 }, { id: 'g2', name: '+2', pts: 2 }, { id: 'g3', name: '+3', pts: 3 }
+    ],
+    deduct: 1,                        // 扣分（每次扣幾點）
     gacha: 30,                         // 扭蛋所需點數
     prize: 60,                         // 獎品所需點數
     convPer: 5,                        // 舊點數換算：每 N 點…
@@ -286,8 +293,7 @@ const CONFIG = {
     cycle: 14,                         // 小組長輪替週期（天）
     reasons: ['非排隊時間沒有坐在座位上', '排隊時聊天講話']  // 扣分原因（「其他」會自動附加）
   },
-  groupSteps: [1, 2, 3, -1],           // 小組秩序分按鈕
-  customMax: 10,                       // 自訂加分按鈕上限
+  customMax: 10,                       // 自訂加分／紙卡張數上限                      // 自訂加分按鈕上限
   settleRequirePositive: true,         // 結算時，小組秩序分 ≤ 0 的組別不加分
   defaultGroupCount: 5,                // 新增班級時預設組數
   seedClasses: ['402', '501', '605'],  // 第一次開啟時自動建立的班級
@@ -296,8 +302,8 @@ const CONFIG = {
 };
 const GROUP_COLORS = ['var(--g1)', 'var(--g2)', 'var(--g3)', 'var(--g4)', 'var(--g5)'];
 const TYPE_LABEL = {
-  card: '紙卡', self: '自我檢核達成', read: '閱讀單', deduct: '扣分', custom: '自訂加分',
-  group: '小組秩序分', settle: '下課結算', gacha: '兌換扭蛋', prize: '兌換獎品', convert: '舊點數換算'
+  card: '個人加點獎勵紙卡', self: '自我檢核章', read: '閱讀學習單', personal: '個人加點', deduct: '扣分', custom: '自訂加分',
+  group: '組別加點', settle: '下課結算', gacha: '兌換扭蛋', prize: '兌換獎品', convert: '舊點數換算'
 };
 const LS_KEY = 'classroom_points_db_v1';
 const LS_UI = 'classroom_points_ui_v1';
@@ -385,10 +391,19 @@ function loadDB() {
 }
 let DB = loadDB();
 let UI = { classId: null, tab: 'students', batch: false, sel: new Set(), sheet: null, fx: { bump: [], float: [], shake: [] },
-  filter: { sid: '', gid: '', type: '', session: '' }, search: '' };
+  filter: { sid: '', gid: '', type: '', session: '' }, search: '', gmode: 'personal', rule: null, qty: 1 };
 try { const u = JSON.parse(localStorage.getItem(LS_UI) || '{}'); if (u.classId && DB.classes[u.classId]) UI.classId = u.classId; if (u.tab) UI.tab = u.tab; } catch (e) {}
 const cls = () => DB.classes[UI.classId];
-const S = c => ({ ...CONFIG.defaults, ...(c.settings || {}) });
+const S = c => {
+  const st = c.settings || {}, o = clone({ ...CONFIG.defaults, ...st });
+  if (!st.personalRules) {            // 舊資料相容：沿用舊版的紙卡／自我檢核／閱讀單點數
+    const m = { card: st.card, self: st.selfCheck, read: st.reading };
+    o.personalRules.forEach(r => { if (m[r.id] != null) r.pts = m[r.id]; });
+  }
+  return o;
+};
+/* 個人加點規則對應的紀錄類型（預設三項沿用舊類型，自訂規則一律記為 personal）*/
+const ruleType = r => ['card', 'self', 'read'].includes(r.id) ? r.id : 'personal';
 function persistLocal() {
   try { localStorage.setItem(LS_KEY, JSON.stringify(DB, (k, v) => k[0] === '_' ? undefined : v)); }
   catch (e) { toast('⚠ 瀏覽器儲存空間不足，請先匯出備份，或刪除座位表圖片'); }
@@ -458,9 +473,9 @@ function gtag(c, s) {
   return g ? `<span class="tag gtag" style="--gc:${gcolor(c, g)}">${esc(g.name)}</span>` : '<span class="tag">未分組</span>';
 }
 const bar = pct => `<div class="bar"><i style="width:${Math.max(0, Math.min(100, pct))}%"></i></div>`;
-function nextGachaHtml(c, s) {
+function nextGachaHtml(c, s, showText = true) {
   const cost = Math.max(1, S(c).gacha), rem = cost - (s._pts % cost);
-  return `<div class="small muted">距離下次扭蛋還差 <b>${rem}</b> 點</div>${bar((s._pts % cost) / cost * 100)}`;
+  return `${showText ? `<div class="small muted">距離下次扭蛋還差 <b>${rem}</b> 點</div>` : ''}${bar((s._pts % cost) / cost * 100)}`;
 }
 
 /* ===================== 紀錄（加扣分）===================== */
@@ -609,13 +624,13 @@ function vStudents(c) {
     <button class="btn" data-act="addStudent">${ico('plus', 20)}新增學生</button>
     <button class="btn yellow" data-act="convertAll">${ico('swap', 20)}全班一次換算舊點數</button>
     <span class="muted small right">共 ${list.length} 位</span></div>
-  ${list.length ? `<div class="table-wrap"><table><thead><tr><th>座號</th><th>姓名</th><th>組別</th><th>角色標籤</th><th>目前點數</th><th>學期累計獲得</th><th>可扭蛋次數</th><th>操作</th></tr></thead><tbody>
+  ${list.length ? `<div class="table-wrap"><table><thead><tr><th>座號</th><th>姓名</th><th>組別</th><th>小幹部</th><th>目前點數</th><th>學期累計獲得</th><th>可扭蛋次數</th><th>操作</th></tr></thead><tbody>
   ${list.map(s => {
     const cn = Math.floor(s._pts / Math.max(1, st.gacha));
     return `<tr><td class="num">${s.no}</td>
     <td class="nm"><a data-act="detail" data-sid="${s.id}">${esc(s.name)}</a></td>
     <td>${gtag(c, s)}</td><td>${roleTags(c, s) || '<span class="muted">—</span>'}</td>
-    <td style="min-width:130px"><span class="num" data-fx="s:${s.id}" style="position:relative;display:inline-block">${s._pts}</span>${nextGachaHtml(c, s)}</td>
+    <td style="min-width:130px"><span class="num" data-fx="s:${s.id}" style="position:relative;display:inline-block">${s._pts}</span>${nextGachaHtml(c, s, false)}</td>
     <td class="num">${s._tot}</td><td class="num">${cn} <span class="small muted">次</span></td>
     <td><div class="ops">
       <button class="btn sm good" data-act="panel" data-sid="${s.id}">${ico('plus', 16)}加扣分</button>
@@ -633,12 +648,14 @@ function vStudents(c) {
 }
 
 /* ----- 分頁 2：分組與加分 ----- */
+function curRule(c) { const rs = S(c).personalRules; return rs.find(r => r.id === UI.rule) || rs[0] || null; }
+const ruleLabel = r => `${esc(r.name)} +${r.pts}`;
 function vGroups(c) {
-  const rk = ranks(c), settled = c.settled[c.session];
+  const st = S(c), rk = ranks(c), settled = c.settled[c.session], gm = UI.gmode === 'group', pb = !gm && UI.batch;
   const card = (g) => {
     const mem = members(c, g ? g.id : ''), gid = g ? g.id : '';
-    const r = g ? rk[g.id] : null;
-    const medalName = g && settled && settled[g.id] ? { 1: 'medalG', 2: 'medalS', 3: 'medalB' }[settled[g.id]] : null;
+    const r = g && gm ? rk[g.id] : null;
+    const medalName = g && gm && settled && settled[g.id] ? { 1: 'medalG', 2: 'medalS', 3: 'medalB' }[settled[g.id]] : null;
     return `<section class="card gcard ${g ? '' : 'unassigned'}" data-fx="card:${gid}" style="${g ? '--gc:' + gcolor(c, g) : '--gc:#EAE5DD'}">
       <div class="ghead">
         <span class="gname">${esc(g ? g.name : '未分組')}</span>
@@ -646,39 +663,46 @@ function vGroups(c) {
         ${g ? `<span class="right row" style="gap:4px"><button class="btn xs" data-act="renameGroup" data-gid="${g.id}" title="重新命名">${ico('edit', 16)}</button><button class="btn xs bad" data-act="delGroup" data-gid="${g.id}" title="刪除組別">${ico('trash', 16)}</button></span>` : ''}
         ${medalName ? `<span class="medal" style="top:46px;right:12px;position:absolute">${ico(medalName, 40)}</span>` : ''}
       </div>
-      ${g ? `<div class="gscore"><div>本節秩序分<br><span class="num" data-fx="g:${gid}">${r ? r.score : gscore(c, gid, c.session)}</span></div>
-        <div class="row" style="gap:6px">${CONFIG.groupSteps.map(v => `<button class="btn sm ${v > 0 ? 'good' : 'bad'}" data-act="gscore" data-gid="${gid}" data-v="${v}">${v > 0 ? '+' : ''}${v}</button>`).join('')}</div></div>` : ''}
-      ${UI.batch && mem.length ? `<div style="padding:8px 14px 0"><button class="btn xs" data-act="selGroup" data-gid="${gid}">全選／取消這一組</button></div>` : ''}
+      ${g && gm ? `<div class="gscore"><div>本節組別加點<br><span class="num" data-fx="g:${gid}">${r ? r.score : gscore(c, gid, c.session)}</span></div>
+        <div class="row" style="gap:6px">${st.groupRules.map(x => `<button class="btn sm good" data-act="gscore" data-gid="${gid}" data-rid="${x.id}">${esc(x.name === '+' + x.pts ? x.name : x.name + ' +' + x.pts)}</button>`).join('') || '<span class="muted small">請到「設定」新增組別加點規則</span>'}</div></div>` : ''}
+      ${pb && mem.length ? `<div style="padding:8px 14px 0"><button class="btn xs" data-act="selGroup" data-gid="${gid}">全選／取消這一組</button></div>` : ''}
       <ul class="members" data-drop="${gid}">
         ${mem.map(s => {
           const lead = g && c.roles.leaders[g.id] === s.id;
           return `<li class="mem ${UI.sel.has(s.id) ? 'sel' : ''}" draggable="true" data-sid="${s.id}" data-act="member">
-            ${UI.batch ? `<input type="checkbox" ${UI.sel.has(s.id) ? 'checked' : ''} tabindex="-1" style="pointer-events:none">` : ''}
+            ${pb ? `<input type="checkbox" ${UI.sel.has(s.id) ? 'checked' : ''} tabindex="-1" style="pointer-events:none">` : ''}
             <span class="mno">${s.no}</span>
             <span class="mname">${lead ? ico('crown', 20) + ' ' : ''}${c.roles.teacher === s.id ? ico('star', 18) + ' ' : ''}${esc(s.name)}</span>
-            <span class="mpts" data-fx="s:${s.id}">${s._pts}</span>
+            ${gm ? '' : `<span class="mpts" data-fx="s:${s.id}">${s._pts}</span>`}
             <span class="mv"><button class="btn xs" data-act="mvUp" data-sid="${s.id}" title="上移">${ico('up', 14)}</button><button class="btn xs" data-act="mvDown" data-sid="${s.id}" title="下移">${ico('down', 14)}</button></span>
           </li>`;
         }).join('') || '<li class="muted small" style="padding:10px">（把學生拖曳到這裡）</li>'}
       </ul></section>`;
   };
+  const rule = curRule(c);
+  const step = pb ? `<div class="card" style="margin-bottom:16px;background:var(--yellow-weak)">
+      <b class="h">① 選擇加點項目</b>
+      <div class="row" style="margin:8px 0 12px">${st.personalRules.map(r => `<button class="btn sm ${rule && rule.id === r.id ? 'good' : ''}" data-act="pickRule" data-rid="${r.id}">${ruleLabel(r)}${r.qty ? ' ／張' : ''}</button>`).join('') || '<span class="muted">請到「設定」新增個人加點規則</span>'}
+        ${rule && rule.qty ? `<span class="h">數量：<select data-chg="batchQty">${Array.from({ length: CONFIG.customMax }, (_, i) => `<option value="${i + 1}" ${UI.qty === i + 1 ? 'selected' : ''}>${i + 1} 張</option>`).join('')}</select></span>` : ''}</div>
+      <b class="h">② 勾選同學（可多選，也可按各組的「全選」）</b>　<span class="muted small">③ 再按下方「確認加點」</span></div>` : '';
   return `<div class="row" style="margin-bottom:14px">
-    <div class="switch ${UI.batch ? 'on' : ''}" data-act="toggleBatch"><span class="trk"></span>批次模式</div>
-    <button class="btn" data-act="addGroup">${ico('plus', 20)}新增組別</button>
-    <button class="btn primary right" data-act="settle">${ico('badge', 20)}${c.settled[c.session] ? '重新檢視結算' : '下課結算'}</button>
-    ${c.settled[c.session] ? `<button class="btn bad" data-act="unsettle">取消本節結算</button>` : ''}
+    <button class="tab ${gm ? '' : 'on'}" data-act="setMode" data-m="personal">${ico('user', 20)}個人加點</button>
+    <button class="tab ${gm ? 'on' : ''}" data-act="setMode" data-m="group">${ico('group', 20)}組別加點</button>
+    ${gm ? '' : `<div class="switch ${UI.batch ? 'on' : ''}" data-act="toggleBatch"><span class="trk"></span>批次模式</div>`}
+    <button class="btn sm" data-act="addGroup">${ico('plus', 18)}新增組別</button>
+    ${gm ? `<span class="right row"><button class="btn primary" data-act="settle">${ico('badge', 20)}${c.settled[c.session] ? '重新檢視結算' : '下課結算'}</button>
+    ${c.settled[c.session] ? `<button class="btn bad" data-act="unsettle">取消本節結算</button>` : ''}</span>` : ''}
   </div>
-  <p class="muted small" style="margin-top:-4px">小組秩序分只決定本節課的小組排名，不會加到個人點數。點學生名字開啟加扣分面板；可拖曳學生到其他組，或用 ▲▼ 調整順序。</p>
+  <p class="muted small" style="margin-top:-4px">${gm ? '組別加點只決定本節課的小組排名，不會加到個人點數；下課結算後，名次靠前的組別，每位組員會得到個人點數。'
+    : '點學生名字開啟個人加扣分面板；開啟「批次模式」可先選加點項目，再一次勾選多位同學加點。'}可拖曳學生到其他組，或用 ▲▼ 調整順序。</p>
+  ${step}
   <div class="grid groups">${c.groups.map(g => card(g)).join('')}${members(c, '').length ? card(null) : ''}</div>`;
 }
 function batchBar(c) {
-  const st = S(c), n = UI.sel.size;
+  const rule = curRule(c), n = UI.sel.size, q = rule && rule.qty ? UI.qty : 1;
   return `<div class="batchbar"><div class="in"><b class="h">已選 ${n} 位</b>
-    <button class="btn sm good" data-act="batch" data-type="card">紙卡 +${st.card}</button>
-    <button class="btn sm good" data-act="batch" data-type="self">自我檢核達成 +${st.selfCheck}</button>
-    <button class="btn sm good" data-act="batch" data-type="read">閱讀單 +${st.reading}</button>
-    <select id="batchCustom" style="min-height:36px;padding:2px 8px">${Array.from({ length: CONFIG.customMax }, (_, i) => `<option value="${i + 1}">+${i + 1}</option>`).join('')}</select>
-    <button class="btn sm" data-act="batch" data-type="custom">自訂加分</button>
+    <span>${rule ? `項目：<b>${esc(rule.name)}</b> ＋${rule.pts * q} 點` : '尚未選擇項目'}</span>
+    <button class="btn good" data-act="batch" ${rule && n ? '' : 'disabled'}>確認加點</button>
     <button class="btn sm ghost" data-act="selClear">清除選取</button>
     <button class="btn sm ghost" data-act="toggleBatch">離開批次</button></div></div>`;
 }
@@ -698,12 +722,10 @@ function panelHtml(c, s) {
     <div class="row" style="margin:12px 0 4px;align-items:flex-end"><span class="hero-pts" data-fx="s:${s.id}" style="position:relative">${s._pts}</span><span class="h" style="font-size:20px">點</span>
       <span class="muted">累計 ${s._tot} 點　可扭蛋 ${gachaCount(c, s)} 次</span></div>
     ${nextGachaHtml(c, s)}
-    <div class="sect"><h4>紙卡（學生下課用小紙卡換點）</h4><div class="btnrow">
-      <input type="number" id="pQty" min="1" value="1" style="width:80px"> 張
-      <button class="btn good" data-act="p-card" data-sid="${s.id}">紙卡 +${st.card}／張</button></div></div>
-    <div class="sect btnrow">
-      <button class="btn good" data-act="p-self" data-sid="${s.id}">自我檢核達成 +${st.selfCheck}</button>
-      <button class="btn good" data-act="p-read" data-sid="${s.id}">閱讀單 +${st.reading}</button></div>
+    <div class="sect"><h4>個人加點</h4><div class="stack">
+      ${st.personalRules.map(r => `<div class="btnrow">
+        ${r.qty ? `<select id="q_${r.id}">${Array.from({ length: CONFIG.customMax }, (_, i) => `<option value="${i + 1}">${i + 1} 張</option>`).join('')}</select>` : ''}
+        <button class="btn good" data-act="p-rule" data-sid="${s.id}" data-rid="${r.id}">${esc(r.name)} +${r.pts}${r.qty ? '／張' : ''}</button></div>`).join('') || '<span class="muted">請到「設定」新增個人加點規則</span>'}</div></div>
     <div class="sect"><h4>扣 ${st.deduct} 點（請選原因）</h4><div class="btnrow">
       <select id="pReason">${st.reasons.map(r => `<option>${esc(r)}</option>`).join('')}<option value="__other">其他（自行輸入）</option></select>
       <input type="text" id="pOther" placeholder="選「其他」時填寫原因" style="flex:1;min-width:160px">
@@ -749,8 +771,10 @@ function studentOptions(c, sel, filterFn) {
     .map(s => `<option value="${s.id}" ${sel === s.id ? 'selected' : ''}>${s.no} ${esc(s.name)}</option>`).join('');
 }
 function roundInfo(c) {
-  const st = S(c), start = new Date(c.roles.roundStart + 'T00:00:00'), end = new Date(start.getTime() + (st.cycle - 1) * 864e5);
-  const nxt = new Date(start.getTime() + st.cycle * 864e5), t0 = new Date(ymd() + 'T00:00:00');
+  /* 起訖日期由老師手動設定；沒設定結束日時，以「起始日＋週期」預設 */
+  const st = S(c), start = new Date(c.roles.roundStart + 'T00:00:00');
+  const end = c.roles.roundEnd ? new Date(c.roles.roundEnd + 'T00:00:00') : new Date(start.getTime() + (st.cycle - 1) * 864e5);
+  const nxt = new Date(end.getTime() + 864e5), t0 = new Date(ymd() + 'T00:00:00');
   return { start: ymd(start), end: ymd(end), left: Math.round((nxt - t0) / 864e5) };
 }
 function vRoles(c) {
@@ -767,7 +791,7 @@ function vRoles(c) {
         <button class="btn yellow" data-act="bigNotes">${ico('expand', 18)}大字顯示</button></div></div>
     ${two('personal', '個人記分員', 'pencil')}${two('scorers', '小組記分員', 'board')}
     <div class="card" style="grid-column:1/-1"><h3>${ico('crown', 24)} 小組長</h3>
-      <div class="row" style="margin-bottom:12px"><span class="pill">第 ${r.round} 輪</span><span>${ri.start} ～ ${ri.end}</span>
+      <div class="row" style="margin-bottom:12px"><span class="pill">第 ${r.round} 輪</span><span class="row" style="gap:6px"><input type="date" data-chg="roundDate" data-k="roundStart" value="${ri.start}"> ～ <input type="date" data-chg="roundDate" data-k="roundEnd" value="${ri.end}"></span>
         <span class="${ri.left <= 0 ? 'neg' : 'muted'}">${ri.left > 0 ? `距離下次輪替還有 ${ri.left} 天` : '已到輪替時間，可按「自動輪替」'}</span>
         <button class="btn primary right" data-act="rotate">${ico('swap', 18)}自動輪替</button></div>
       <div class="grid two" style="gap:10px">${c.groups.map(g => `<div class="row"><span class="tag gtag" style="--gc:${gcolor(c, g)};font-size:16px">${esc(g.name)}</span>
@@ -799,24 +823,41 @@ function vLogs(c) {
   </tbody></table></div>${total > 300 ? `<p class="muted small">僅顯示最新 300 筆（共 ${total} 筆符合）。請用篩選縮小範圍。</p>` : ''}`;
 }
 
-/* ----- 分頁 6：設定 ----- */
+/* ----- 分頁 6：設定（點數規則可直接編輯，修改後自動儲存）----- */
 function vSettings(c) {
-  const st = S(c), n = (k, label, unit = '點') => `<label class="row" style="justify-content:space-between;border-bottom:2px dashed var(--line);padding:6px 0">${label}<span><input type="number" min="0" id="set_${k}" value="${st[k]}"> ${unit}</span></label>`;
-  return `<div class="grid two">
-    <div class="card"><h3>點數規則（${esc(c.name)} 班）</h3>
-      ${n('rank1', '下課結算：第 1 名')}${n('rank2', '下課結算：第 2 名')}${n('rank3', '下課結算：第 3 名')}
-      ${n('card', '紙卡（每張）')}${n('selfCheck', '自我檢核達成')}${n('reading', '閱讀單')}${n('deduct', '扣分（每次）')}
+  const st = S(c);
+  const n = (k, label, unit = '點') => `<label class="row" style="justify-content:space-between;border-bottom:2px dashed var(--line);padding:6px 0">${label}<span><input type="number" min="0" value="${st[k]}" data-chg="setnum" data-k="${k}"> ${unit}</span></label>`;
+  const ruleRow = (kind, r) => {
+    const d = `data-chg="rule" data-kind="${kind}" data-id="${r.id}"`;
+    return `<tr><td><input type="text" value="${esc(r.name)}" ${d} data-f="name" style="width:100%;min-width:170px"></td>
+      <td style="white-space:nowrap">＋<input type="number" min="0" value="${r.pts}" ${d} data-f="pts" style="width:76px"> 點</td>
+      ${kind === 'personal' ? `<td><label style="white-space:nowrap"><input type="checkbox" ${r.qty ? 'checked' : ''} ${d} data-f="qty"> 可選數量（1–10）</label></td>
+      <td><label style="white-space:nowrap"><input type="checkbox" ${r.needSelf ? 'checked' : ''} ${d} data-f="needSelf"> 需先完成自我檢核</label></td>` : ''}
+      <td><button class="btn xs bad" data-act="delRule" data-kind="${kind}" data-id="${r.id}">${ico('trash', 14)}</button></td></tr>`;
+  };
+  const table = (kind, rows, heads) => `<div class="table-wrap"><table style="min-width:0"><thead><tr>${heads.map(h => `<th>${h}</th>`).join('')}<th></th></tr></thead><tbody>${rows.map(r => ruleRow(kind, r)).join('') || `<tr><td colspan="5" class="empty">還沒有規則</td></tr>`}</tbody></table></div>
+    <div style="margin-top:10px"><button class="btn sm" data-act="addRule" data-kind="${kind}">${ico('plus', 16)}新增規則</button></div>`;
+  return `<p class="muted" style="margin-top:0">規則名稱、點數、增減都會立刻存檔，並同步顯示在「分組與加分」頁的加點選單。</p>
+  <div class="grid two">
+    <div class="card" style="grid-column:1/-1"><h3>${ico('user', 24)} 個人加點（${esc(c.name)} 班）</h3>
+      ${table('personal', st.personalRules, ['規則名稱', '每次加點', '數量', '提醒'])}
+      <div class="sect">${n('deduct', '扣分（每次扣幾點）')}</div></div>
+    <div class="card"><h3>${ico('group', 24)} 組別加點</h3>
+      <p class="muted small" style="margin-top:0">組別加點規則（只加分，決定本節課小組排名）：</p>
+      ${table('group', st.groupRules, ['規則名稱', '每次加點'])}
+      <div class="sect"><h4>下課結算小組加分（每位組員）</h4>
+      ${n('rank1', '第 1 名')}${n('rank2', '第 2 名')}${n('rank3', '第 3 名')}</div></div>
+    <div class="card"><h3>${ico('gift', 24)} 兌換與其他</h3>
       ${n('gacha', '扭蛋所需點數')}${n('prize', '獎品所需點數')}
       ${n('convPer', '舊點數換算：每幾點')}${n('convGive', '　　　　　　　換幾點')}${n('convRem', '　　　不滿時的餘數算')}
-      ${n('cycle', '小組長輪替週期', '天')}
-      <div class="row" style="margin-top:14px"><button class="btn primary" data-act="saveSettings">儲存設定</button><button class="btn ghost" data-act="defaultSettings">還原預設值</button></div></div>
-    <div class="card"><h3>扣分原因選單</h3><p class="muted" style="margin-top:0">一行一個原因（「其他」會自動附加）。</p>
-      <textarea id="set_reasons" rows="6">${esc(st.reasons.join('\n'))}</textarea>
-      <div class="row" style="margin-top:10px"><button class="btn primary" data-act="saveSettings">儲存設定</button></div>
-      <div class="sect"><h3>班級</h3><div class="row"><button class="btn" data-act="renameClass" data-id="${c.id}">${ico('edit', 18)}重新命名班級</button></div></div>
-      <div class="sect"><h3 style="color:var(--bad)">危險區</h3>
+      ${n('cycle', '小組長預設輪替週期', '天')}
+      <div class="row" style="margin-top:14px"><button class="btn ghost" data-act="defaultSettings">還原全部預設值</button></div></div>
+    <div class="card"><h3>扣分原因選單</h3><p class="muted" style="margin-top:0">一行一個原因（「其他」會自動附加），修改後離開輸入框即儲存。</p>
+      <textarea rows="6" data-chg="reasons">${esc(st.reasons.join('\n'))}</textarea>
+      <div class="sect"><h3>班級</h3><div class="row"><button class="btn" data-act="renameClass" data-id="${c.id}">${ico('edit', 18)}重新命名班級</button></div></div></div>
+    <div class="card"><h3 style="color:var(--bad)">危險區</h3>
         <button class="btn bad" data-act="resetPoints">重設本班所有點數</button>
-        <p class="muted small">會清除本班全部加扣分、結算、兌換、換算紀錄，學生名單與分組不變。</p></div></div></div>`;
+        <p class="muted small">會清除本班全部加扣分、結算、兌換、換算紀錄，學生名單與分組不變。</p></div></div>`;
 }
 </script>
 
@@ -829,7 +870,9 @@ const download = (name, text, type = 'application/json') => {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name;
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 };
-const nameForm = (label, val = '') => `<label class="h">${label}<br><input type="text" id="f_name" value="${esc(val)}" style="width:100%;margin-top:6px"></label>`;
+/* 編輯設定前，確保這個班級有自己完整的一份設定（含個人／組別加點規則）*/
+function ownSettings(c) { if (!c.settings || !c.settings.personalRules || !c.settings.groupRules) c.settings = S(c); }
+const nameForm =(label, val = '') => `<label class="h">${label}<br><input type="text" id="f_name" value="${esc(val)}" style="width:100%;margin-top:6px"></label>`;
 
 /* ----- 兌換動畫（扭蛋機／禮物盒）----- */
 function showGacha(kind, name) {
@@ -946,16 +989,19 @@ const ACT = {
     ms.forEach(s => all ? UI.sel.delete(s.id) : UI.sel.add(s.id)); render();
   },
   selClear() { UI.sel.clear(); render(); },
-  async batch(el) {
-    const c = cls(), st = S(c), ids = [...UI.sel].filter(id => stu(c, id)), type = el.dataset.type;
+  setMode(el) { UI.gmode = el.dataset.m; if (UI.gmode === 'group') UI.batch = false; UI.sel.clear(); render(); },
+  pickRule(el) { UI.rule = el.dataset.rid; render(); },
+  /* 批次加點：先選項目（紙卡可選 1–10 張），再勾選多位同學，按「確認加點」*/
+  async batch() {
+    const c = cls(), rule = curRule(c), ids = [...UI.sel].filter(id => stu(c, id));
+    if (!rule) { toast('請先選擇加點項目'); return; }
     if (!ids.length) { toast('請先勾選學生'); return; }
-    let pts = { card: st.card, self: st.selfCheck, read: st.reading }[type], reason = '批次';
-    if (type === 'custom') pts = +$('#batchCustom').value;
-    if (type === 'read') {
+    const q = rule.qty ? UI.qty : 1, pts = rule.pts * q;
+    if (rule.needSelf) {
       const miss = ids.filter(id => !hasSelfCheck(c, id)).length;
-      if (miss && !(await confirmBox(`有 ${miss} 位學生本節課尚未完成自我檢核，仍要全部加分嗎？`, { ok: '仍要加分' }))) return;
+      if (miss && !(await confirmBox(`有 ${miss} 位學生本節課尚未完成自我檢核，仍要全部加分嗎？`, { title: '提醒', ok: '仍要加分' }))) return;
     }
-    awardMany(ids, type, pts, reason); UI.sel.clear(); toast(`已為 ${ids.length} 位學生 +${pts}`);
+    awardMany(ids, ruleType(rule), pts, rule.name + (rule.qty ? `（${q} 張）` : '')); UI.sel.clear(); toast(`已為 ${ids.length} 位學生 +${pts}`);
   },
   async addGroup() {
     const c = cls(), v = await formBox('新增組別', nameForm('組別名稱', `第${c.groups.length + 1}組`), o => { const n = $('#f_name', o).value.trim(); return n || (toast('請輸入名稱'), undefined); });
@@ -973,8 +1019,9 @@ const ACT = {
     c.groups = c.groups.filter(x => x.id !== g.id); delete c.roles.leaders[g.id]; commit(c);
   },
   gscore(el) {
-    const c = cls(), g = gobj(c, el.dataset.gid), v = +el.dataset.v;
-    const l = mkLog(c, null, 'group', v, ''); l.gid = g.id; c.logs.push(l);
+    const c = cls(), g = gobj(c, el.dataset.gid), rule = S(c).groupRules.find(r => r.id === el.dataset.rid);
+    if (!rule || !g) return; const v = rule.pts;
+    const l = mkLog(c, null, 'group', v, rule.name); l.gid = g.id; c.logs.push(l);
     if (v > 0) { UI.fx.bump.push('g:' + g.id); UI.fx.float.push({ k: 'g:' + g.id, t: '+' + v, c: 'good' }); } else UI.fx.shake.push('card:' + g.id);
     commit(c);
   },
@@ -1004,12 +1051,11 @@ const ACT = {
   },
 
   /* ----- 個人面板 ----- */
-  'p-card'(el) { const c = cls(), q = Math.max(1, Math.floor(+$('#pQty').value || 1)); award(el.dataset.sid, 'card', S(c).card * q, `${q} 張`); },
-  'p-self'(el) { award(el.dataset.sid, 'self', S(cls()).selfCheck, ''); },
-  async 'p-read'(el) {
-    const c = cls(), id = el.dataset.sid;
-    if (!hasSelfCheck(c, id) && !(await confirmBox('這位學生本節課尚未完成自我檢核，仍要加分嗎？', { title: '提醒', ok: '仍要加分' }))) return;
-    award(id, 'read', S(c).reading, '');
+  async 'p-rule'(el) {
+    const c = cls(), id = el.dataset.sid, rule = S(c).personalRules.find(r => r.id === el.dataset.rid); if (!rule) return;
+    const q = rule.qty ? Math.max(1, Math.floor(+($('#q_' + rule.id) || {}).value || 1)) : 1;
+    if (rule.needSelf && !hasSelfCheck(c, id) && !(await confirmBox('這位學生本節課尚未完成自我檢核，仍要加分嗎？', { title: '提醒', ok: '仍要加分' }))) return;
+    award(id, ruleType(rule), rule.pts * q, rule.name + (rule.qty ? `（${q} 張）` : ''));
   },
   'p-deduct'(el) {
     const c = cls(), sel = $('#pReason').value; let reason = sel;
@@ -1049,8 +1095,8 @@ const ACT = {
       const ms = members(c, g.id); if (!ms.length) return;
       const i = ms.findIndex(s => s.id === r.leaders[g.id]); r.leaders[g.id] = ms[(i + 1) % ms.length].id;
     });
-    if (hadAny) { r.history.push({ round: r.round, start: r.roundStart, end: ymd(), leaders: old }); r.round++; }
-    r.roundStart = ymd(); commit(c); toast('已輪替小組長');
+    if (hadAny) { r.history.push({ round: r.round, start: r.roundStart, end: roundInfo(c).end, leaders: old }); r.round++; }
+    r.roundStart = ymd(); r.roundEnd = ymd(new Date(Date.now() + (S(c).cycle - 1) * 864e5)); commit(c); toast('已輪替小組長（起訖日可再手動調整）');
   },
 
   /* ----- 紀錄 ----- */
@@ -1067,14 +1113,17 @@ const ACT = {
   },
 
   /* ----- 設定 ----- */
-  saveSettings() {
-    const c = cls(), st = { ...S(c) };
-    for (const k of ['rank1', 'rank2', 'rank3', 'card', 'selfCheck', 'reading', 'deduct', 'gacha', 'prize', 'convPer', 'convGive', 'convRem', 'cycle']) {
-      const v = Math.floor(+$('#set_' + k).value); if (!(v >= 0)) { toast('請輸入正確的數字'); return; } st[k] = v;
-    }
-    if (st.gacha < 1 || st.prize < 1 || st.convPer < 1 || st.cycle < 1) { toast('扭蛋、獎品、換算單位、週期不可為 0'); return; }
-    st.reasons = $('#set_reasons').value.split('\n').map(x => x.trim()).filter(Boolean);
-    c.settings = st; commit(c); toast('設定已儲存');
+  addRule(el) {
+    const c = cls(); ownSettings(c);
+    if (el.dataset.kind === 'personal') c.settings.personalRules.push({ id: uid(), name: '新規則', pts: 1, qty: false, needSelf: false });
+    else c.settings.groupRules.push({ id: uid(), name: '新規則', pts: 1 });
+    commit(c);
+  },
+  async delRule(el) {
+    const c = cls(); ownSettings(c);
+    const key = el.dataset.kind === 'personal' ? 'personalRules' : 'groupRules', r = c.settings[key].find(x => x.id === el.dataset.id);
+    if (!r || !(await confirmBox(`確定刪除規則「${r.name}」嗎？\n（已經記錄過的加點紀錄不受影響）`, { danger: true, ok: '刪除規則' }))) return;
+    c.settings[key] = c.settings[key].filter(x => x.id !== r.id); commit(c);
   },
   async defaultSettings() { const c = cls(); if (await confirmBox('要還原成預設的點數規則嗎？', { ok: '還原' })) { c.settings = clone(CONFIG.defaults); commit(c); } },
   async resetPoints() {
@@ -1220,6 +1269,27 @@ document.addEventListener('change', async e => {
   const k = t.dataset && t.dataset.chg; if (!k) return;
   if (k === 'filter') { UI.filter[t.dataset.k] = t.value; render(); return; }
   if (k === 'moveTo') { moveStudent(t.dataset.sid, t.value); return; }
+  if (k === 'batchQty') { UI.qty = +t.value; render(); return; }
+  if (k === 'rule' || k === 'setnum' || k === 'reasons') {          // 設定頁：修改後自動儲存
+    ownSettings(c); const sg = c.settings;
+    if (k === 'rule') {
+      const r = sg[t.dataset.kind === 'personal' ? 'personalRules' : 'groupRules'].find(x => x.id === t.dataset.id), f = t.dataset.f; if (!r) return;
+      if (f === 'name') r.name = t.value.trim() || r.name;
+      else if (f === 'pts') r.pts = Math.max(0, Math.floor(+t.value) || 0);
+      else r[f] = t.checked;
+    } else if (k === 'setnum') {
+      const key = t.dataset.k; let v = Math.max(0, Math.floor(+t.value) || 0);
+      if (['gacha', 'prize', 'convPer', 'cycle'].includes(key)) v = Math.max(1, v);
+      sg[key] = v;
+    } else sg.reasons = t.value.split('\n').map(x => x.trim()).filter(Boolean);
+    commit(c); return;
+  }
+  if (k === 'roundDate') {
+    if (!t.value) { render(); return; }
+    const r0 = c.roles; r0[t.dataset.k] = t.value;
+    if (r0.roundEnd && r0.roundEnd < r0.roundStart) { toast('結束日不能早於起始日'); r0[t.dataset.k] = t.dataset.k === 'roundStart' ? r0.roundEnd : r0.roundStart; }
+    commit(c); return;
+  }
   const r = c.roles;
   if (k === 'teacher') r.teacher = t.value || null;
   else if (k === 'leader') { t.value ? r.leaders[t.dataset.gid] = t.value : delete r.leaders[t.dataset.gid]; }
