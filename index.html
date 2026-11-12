@@ -34,12 +34,12 @@
 <script>
 /* ===================== Firebase 設定區（請在這裡貼上你的 firebaseConfig）===================== */
 window.FIREBASE_CONFIG = {
-  apiKey: "",
-  authDomain: "",
-  projectId: "",
-  storageBucket: "",
-  messagingSenderId: "",
-  appId: ""
+  apiKey: "AIzaSyD-4cyfkv3ntj6iCySlUPkW6edb28goxHg",
+  authDomain: "class-points-43059.firebaseapp.com",
+  projectId: "class-points-43059",
+  storageBucket: "class-points-43059.firebasestorage.app",
+  messagingSenderId: "152196299396",
+  appId: "1:152196299396:web:f5806f92b48d49551ea0d1"
 };
 </script>
 
@@ -1165,7 +1165,7 @@ async function parseStudentFile(file) {
   let wb;
   if (nm.endsWith('.csv')) {
     let t = new TextDecoder('utf-8').decode(buf);
-    if (t.includes('�')) { try { t = new TextDecoder('big5').decode(buf); } catch (e) {} }
+    if (t.includes(' ')) { try { t = new TextDecoder('big5').decode(buf); } catch (e) {} }
     wb = XLSX.read(t.replace(/^﻿/, ''), { type: 'string' });
   } else wb = XLSX.read(buf, { type: 'array' });
   return rowsToStudents(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '', raw: false }));
