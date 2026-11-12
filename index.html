@@ -1194,7 +1194,33 @@ function normGroup(v) {
   if (m) { const n = /\d/.test(m[0]) ? +m[0] : zh[m[0]]; return `第${n}組`; }
   return s;
 }
+/* 「座位表式」表格：
+   ‧ 只有一格的橫列（例：第 1 組）＝ 組別標題
+   ‧ 第一格含「座號／姓名」的橫列，後面每格是「座號 姓名」（空格略過）＝ 該組學生
+   ‧ 第一格含「幹部」的橫列，各格對應正上方學生的小幹部（小組長、小老師…）*/
+function parseSeatChart(rows) {
+  const out = []; let group = '', last = {}, sawHeader = false;
+  rows.forEach(r => {
+    const cells = (r || []).map(x => String(x ?? '').replace(/\s+/g, ' ').trim());
+    const filled = cells.filter(Boolean); if (!filled.length) return;
+    if (filled.length === 1 && /組/.test(filled[0]) && !/座號|姓名|幹部/.test(filled[0])) { group = normGroup(filled[0]); sawHeader = true; last = {}; return; }
+    if (/座號|姓名/.test(cells[0]) && !/^\d/.test(cells[0])) {
+      last = {};
+      cells.forEach((t, i) => {
+        if (i === 0 || !t) return;
+        const m = t.match(/^(\d{1,3})[\s.、,，:：\-]*(\S[\s\S]*)$/); if (!m || /^\d/.test(m[2])) return;
+        const s = { no: +m[1], name: m[2].replace(/\s+/g, ''), group, cadre: '' }; out.push(s); last[i] = s;
+      });
+      return;
+    }
+    if (/幹部|補充/.test(cells[0])) cells.forEach((t, i) => { if (i > 0 && t && last[i]) last[i].cadre = t; });
+  });
+  if (!sawHeader || !out.length) return [];
+  const seen = new Set();
+  return out.filter(s => !seen.has(s.no) && seen.add(s.no)).sort((a, b) => a.no - b.no);
+}
 function rowsToStudents(rows) {
+  const chart = parseSeatChart(rows); if (chart.length) return chart;
   let ci = { no: 0, name: 1 }, start = 0, header = false;
   for (let i = 0; i < Math.min(rows.length, 10); i++) {
     const r = (rows[i] || []).map(x => String(x).trim());
@@ -1232,9 +1258,9 @@ async function importStudents(file) {
   const c = cls(); let list;
   try { list = await parseStudentFile(file); } catch (e) { console.error(e); await alertBox('讀取檔案失敗：' + e.message, '匯入失敗'); return; }
   if (!list.length) { await alertBox('找不到「座號」與「姓名」。\n請確認檔案內容（Excel 找不到標題時，會把第一欄當座號、第二欄當姓名）。', '沒有讀到學生'); return; }
-  const has = c.students.length > 0, hasG = list.some(s => s.group);
+  const has = c.students.length > 0, hasG = list.some(s => s.group), hasC = list.some(s => s.cadre);
   const mode = await formBox(`匯入預覽（共 ${list.length} 位）`,
-    `<div class="table-wrap" style="max-height:34vh;overflow:auto"><table style="min-width:0"><thead><tr><th>座號</th><th>姓名</th>${hasG ? '<th>組別（自動判讀）</th>' : ''}</tr></thead><tbody>${list.map(s => `<tr><td class="num">${s.no}</td><td>${esc(s.name)}</td>${hasG ? `<td>${esc(s.group || '—')}</td>` : ''}</tr>`).join('')}</tbody></table></div>
+    `<div class="table-wrap" style="max-height:34vh;overflow:auto"><table style="min-width:0"><thead><tr><th>座號</th><th>姓名</th>${hasG ? '<th>組別（自動判讀）</th>' : ''}${hasC ? '<th>小幹部（自動判讀）</th>' : ''}</tr></thead><tbody>${list.map(s => `<tr><td class="num">${s.no}</td><td>${esc(s.name)}</td>${hasG ? `<td>${esc(s.group || '—')}</td>` : ''}${hasC ? `<td>${esc(s.cadre || '')}</td>` : ''}</tr>`).join('')}</tbody></table></div>
     ${hasG ? '<p class="muted small">已從檔案的「組別」欄自動判讀組別；找不到的組別會自動新增。匯入後可到「分組與加分」手動調整。</p>' : ''}
     ${has ? `<div class="notice" style="margin-top:12px"><b>班上已經有 ${c.students.length} 位學生，要怎麼處理？</b><br>
       <label><input type="radio" name="imode" value="append" checked> 新增（座號重複者略過）</label><br>
@@ -1252,7 +1278,16 @@ async function importStudents(file) {
     if (!g) { g = { id: uid(), name, ci: c.groups.length }; c.groups.push(g); }
     return g.id;
   };
-  list.forEach(s => { if (have.has(s.no)) return; c.students.push({ id: uid(), no: s.no, name: s.name, gid: gidOf(s.group), order: s.no, oldPts: null, converted: false }); add++; });
+  list.forEach(s => {
+    if (have.has(s.no)) return;
+    const st = { id: uid(), no: s.no, name: s.name, gid: gidOf(s.group), order: s.no, oldPts: null, converted: false };
+    c.students.push(st); add++;
+    const r = c.roles, t = s.cadre || '';                         // 依「幹部補充區」指派小幹部
+    if (/小組長/.test(t) && st.gid) r.leaders[st.gid] = st.id;
+    if (/小老師/.test(t)) r.teacher = st.id;
+    if (/個人記分/.test(t) && r.personal.length < 2) r.personal.push(st.id);
+    if (/小組記分/.test(t) && r.scorers.length < 2) r.scorers.push(st.id);
+  });
   commit(c); toast(`已匯入 ${add} 位學生`);
 }
 
