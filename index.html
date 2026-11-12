@@ -1186,18 +1186,27 @@ async function linkForm(id) {
 /* =====================================================================
    匯入學生名單（Excel / CSV / Word）
    ===================================================================== */
+/* 組別文字統一：「1」「第1組」「一」「1組」都轉成「第1組」；其他文字（例：甲組）原樣保留 */
+function normGroup(v) {
+  let s = String(v ?? '').trim(); if (!s) return '';
+  const zh = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+  const m = s.match(/\d+/) || s.match(/[一二三四五六七八九十]/);
+  if (m) { const n = /\d/.test(m[0]) ? +m[0] : zh[m[0]]; return `第${n}組`; }
+  return s;
+}
 function rowsToStudents(rows) {
   let ci = { no: 0, name: 1 }, start = 0, header = false;
   for (let i = 0; i < Math.min(rows.length, 10); i++) {
     const r = (rows[i] || []).map(x => String(x).trim());
     const a = r.findIndex(x => /座號|號碼/.test(x)), b = r.findIndex(x => /姓名|名字|學生/.test(x));
-    if (a >= 0 && b >= 0 && a !== b) { ci = { no: a, name: b }; start = i + 1; header = true; break; }
+    const g = r.findIndex(x => /組別|小組|分組|^組$/.test(x));     // 有「組別」欄就自動判讀
+    if (a >= 0 && b >= 0 && a !== b) { ci = { no: a, name: b, group: g }; start = i + 1; header = true; break; }
   }
   const out = [], seen = new Set();
   for (let i = start; i < rows.length; i++) {
     const r = rows[i] || [], no = noNum(String(r[ci.no] ?? '').trim()), name = String(r[ci.name] ?? '').trim();
     if (!(no > 0) || !name || seen.has(no)) continue;
-    seen.add(no); out.push({ no, name });
+    seen.add(no); out.push({ no, name, group: ci.group >= 0 ? normGroup(r[ci.group]) : '' });
   }
   return out.sort((a, b) => a.no - b.no);
 }
@@ -1223,9 +1232,10 @@ async function importStudents(file) {
   const c = cls(); let list;
   try { list = await parseStudentFile(file); } catch (e) { console.error(e); await alertBox('讀取檔案失敗：' + e.message, '匯入失敗'); return; }
   if (!list.length) { await alertBox('找不到「座號」與「姓名」。\n請確認檔案內容（Excel 找不到標題時，會把第一欄當座號、第二欄當姓名）。', '沒有讀到學生'); return; }
-  const has = c.students.length > 0;
+  const has = c.students.length > 0, hasG = list.some(s => s.group);
   const mode = await formBox(`匯入預覽（共 ${list.length} 位）`,
-    `<div class="table-wrap" style="max-height:34vh;overflow:auto"><table style="min-width:0"><thead><tr><th>座號</th><th>姓名</th></tr></thead><tbody>${list.map(s => `<tr><td class="num">${s.no}</td><td>${esc(s.name)}</td></tr>`).join('')}</tbody></table></div>
+    `<div class="table-wrap" style="max-height:34vh;overflow:auto"><table style="min-width:0"><thead><tr><th>座號</th><th>姓名</th>${hasG ? '<th>組別（自動判讀）</th>' : ''}</tr></thead><tbody>${list.map(s => `<tr><td class="num">${s.no}</td><td>${esc(s.name)}</td>${hasG ? `<td>${esc(s.group || '—')}</td>` : ''}</tr>`).join('')}</tbody></table></div>
+    ${hasG ? '<p class="muted small">已從檔案的「組別」欄自動判讀組別；找不到的組別會自動新增。匯入後可到「分組與加分」手動調整。</p>' : ''}
     ${has ? `<div class="notice" style="margin-top:12px"><b>班上已經有 ${c.students.length} 位學生，要怎麼處理？</b><br>
       <label><input type="radio" name="imode" value="append" checked> 新增（座號重複者略過）</label><br>
       <label><input type="radio" name="imode" value="replace"> 覆蓋（清除原名單，<b>連同所有點數紀錄</b>）</label></div>` : ''}`,
@@ -1236,7 +1246,13 @@ async function importStudents(file) {
     c.students = []; c.logs = []; c.settled = {}; c.roles = { ...c.roles, teacher: null, personal: [], scorers: [], leaders: {}, history: [] };
   }
   const have = new Set(c.students.map(s => s.no)); let add = 0;
-  list.forEach(s => { if (have.has(s.no)) return; c.students.push({ id: uid(), no: s.no, name: s.name, gid: null, order: s.no, oldPts: null, converted: false }); add++; });
+  const gidOf = name => {                      // 依組別名稱找組別，找不到就新增
+    if (!name) return null;
+    let g = c.groups.find(x => x.name === name || normGroup(x.name) === name);
+    if (!g) { g = { id: uid(), name, ci: c.groups.length }; c.groups.push(g); }
+    return g.id;
+  };
+  list.forEach(s => { if (have.has(s.no)) return; c.students.push({ id: uid(), no: s.no, name: s.name, gid: gidOf(s.group), order: s.no, oldPts: null, converted: false }); add++; });
   commit(c); toast(`已匯入 ${add} 位學生`);
 }
 
