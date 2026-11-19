@@ -898,6 +898,11 @@ function showGacha(kind, name) {
   });
 }
 
+/* 結算視窗：改名次時，同步更新「每位組員加」的顯示 */
+function settleUpd(sel) {
+  const b = sel.dataset.b.split(',').map(Number), v = +sel.value, cell = sel.closest('tr').lastElementChild;
+  cell.textContent = v ? '+' + b[v] : '—';
+}
 const ACT = {
   /* ----- 導覽 ----- */
   home() { UI.classId = null; UI.sheet = null; UI.batch = false; UI.sel.clear(); render(); },
@@ -1028,21 +1033,28 @@ const ACT = {
   async settle() {
     const c = cls(), rk = ranks(c), gs = c.groups.filter(g => rk[g.id]).sort((a, b) => rk[a.id].rank - rk[b.id].rank || c.groups.indexOf(a) - c.groups.indexOf(b));
     if (!gs.length) { await alertBox('目前沒有任何有組員的組別可以結算。'); return; }
-    const rows = gs.map(g => ({ g, n: members(c, g.id).length, ...rk[g.id], bonus: bonusFor(c, rk[g.id].rank, rk[g.id].score) }));
-    const done = !!c.settled[c.session];
-    const table = `<div class="table-wrap"><table style="min-width:0"><thead><tr><th>名次</th><th>組別</th><th>秩序分</th><th>每位組員</th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td class="num">${r.rank}</td><td>${esc(r.g.name)}（${r.n} 人）</td><td class="num">${r.score}</td><td class="${r.bonus ? 'pos' : 'muted'}">${r.bonus ? '+' + r.bonus : '不加分'}</td></tr>`).join('')}</tbody></table></div>`;
-    if (done) { await alertBox('本節課已結算。\n如需重算，請先按「取消本節結算」。', '已結算'); return; }
-    const ok = await dialog(`<h3>下課結算預覽（第 ${c.session} 節）</h3>${table}
-      <p class="muted small">確認後會把點數加到各組員的個人點數，每節課只能結算一次。同分名次相同。</p>
-      <div class="acts"><button class="btn ghost" data-d="no">取消</button><button class="btn primary" data-d="ok">確認結算</button></div>`);
-    if (!ok) return;
-    const op = uid(), map = {};
-    rows.forEach(r => {
-      if (r.bonus <= 0) return; map[r.g.id] = r.rank;
-      members(c, r.g.id).forEach(s => { c.logs.push(mkLog(c, s, 'settle', r.bonus, `第${r.rank}名（${r.g.name}）`, op)); fxAward(s.id, r.bonus, s.gid); });
+    const st = S(c), bon = [0, st.rank1, st.rank2, st.rank3];
+    if (c.settled[c.session]) { await alertBox('本節課已結算。\n如需重算，請先按「取消本節結算」。', '已結算'); return; }
+    /* 名次由老師手動指定：每個名次可以有多個組別（並列），預設依本節加點自動建議 */
+    const rows = gs.map(g => ({ g, n: members(c, g.id).length, score: rk[g.id].score, auto: bonusFor(c, rk[g.id].rank, rk[g.id].score) > 0 ? Math.min(3, rk[g.id].rank) : 0 }));
+    const table = `<div class="table-wrap"><table style="min-width:0"><thead><tr><th>組別</th><th>本節加點</th><th>名次</th><th>每位組員加</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td>${esc(r.g.name)}（${r.n} 人）</td><td class="num">${r.score}</td>
+        <td><select data-gid="${r.g.id}" data-b="${bon.join(',')}" onchange="settleUpd(this)">
+          ${[0, 1, 2, 3].map(k => `<option value="${k}" ${r.auto === k ? 'selected' : ''}>${k ? '第 ' + k + ' 名' : '不加分'}</option>`).join('')}</select></td>
+        <td class="pos num">${r.auto ? '+' + bon[r.auto] : '—'}</td></tr>`).join('')}</tbody></table></div>`;
+    const map = await dialog(`<h3>下課結算（第 ${c.session} 節）</h3>
+      <p class="muted small" style="margin-top:0">請為每一組選擇名次，同一個名次可以選多個組別（並列）。「本節加點」只是參考，已先幫你依分數建議名次，可自行修改。
+      第 1 名每位組員 +${st.rank1}、第 2 名 +${st.rank2}、第 3 名 +${st.rank3}。</p>${table}
+      <p class="muted small">確認後會把點數加到各組員的個人點數，每節課只能結算一次。</p>
+      <div class="acts"><button class="btn ghost" data-d="no">取消</button><button class="btn primary" data-d="ok">確認結算</button></div>`,
+      o => { const m = {}; $$('select[data-gid]', o).forEach(s => { if (+s.value) m[s.dataset.gid] = +s.value; }); if (!Object.keys(m).length && !confirm('沒有任何組別加分，仍要結算嗎？')) return undefined; return m; });
+    if (!map) return;
+    const op = uid(), settled = {};
+    Object.entries(map).forEach(([gid, rank]) => {
+      const g = gobj(c, gid), b = bon[rank]; if (!g || b <= 0) return; settled[gid] = rank;
+      members(c, gid).forEach(s => { c.logs.push(mkLog(c, s, 'settle', b, `第${rank}名（${g.name}）`, op)); fxAward(s.id, b, s.gid); });
     });
-    c.settled[c.session] = map; commit(c); toast('結算完成！');
+    c.settled[c.session] = settled; commit(c); toast('結算完成！');
   },
   async unsettle() {
     const c = cls();
